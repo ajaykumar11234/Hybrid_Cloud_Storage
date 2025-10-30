@@ -9,6 +9,7 @@ import time
 import threading
 from datetime import datetime, timedelta
 import os
+import urllib.parse
 
 # -----------------------------
 # Load environment variables
@@ -58,6 +59,64 @@ if not found:
     print(f"✅ Created MinIO bucket: {MINIO_BUCKET}")
 
 # -----------------------
+# HELPER FUNCTIONS
+# -----------------------
+
+def get_content_type(filename):
+    """Get content type based on file extension for proper preview"""
+    extension = filename.lower().split('.')[-1]
+    content_types = {
+        'pdf': 'application/pdf',
+        'jpg': 'image/jpeg',
+        'jpeg': 'image/jpeg',
+        'png': 'image/png',
+        'gif': 'image/gif',
+        'txt': 'text/plain',
+        'html': 'text/html',
+        'htm': 'text/html',
+        'json': 'application/json',
+        'xml': 'application/xml',
+        'csv': 'text/csv',
+    }
+    return content_types.get(extension, 'application/octet-stream')
+
+def generate_preview_urls(filename):
+    """Generate preview URLs for MinIO and S3 that open in browser"""
+    
+    # MinIO Preview URL
+    try:
+        minio_preview_url = minio_client.presigned_get_object(
+            MINIO_BUCKET,
+            filename,
+            expires=timedelta(hours=1),
+            response_headers={
+                'response-content-type': get_content_type(filename),
+                'response-content-disposition': f'inline; filename="{filename}"'
+            }
+        )
+    except Exception as e:
+        print(f"Error generating MinIO preview URL: {e}")
+        minio_preview_url = None
+
+    # S3 Preview URL
+    try:
+        s3_preview_url = s3_client.generate_presigned_url(
+            'get_object',
+            Params={
+                'Bucket': AWS_BUCKET,
+                'Key': filename,
+                'ResponseContentType': get_content_type(filename),
+                'ResponseContentDisposition': f'inline; filename="{filename}"'
+            },
+            ExpiresIn=3600
+        )
+    except Exception as e:
+        print(f"Error generating S3 preview URL: {e}")
+        s3_preview_url = None
+
+    return minio_preview_url, s3_preview_url
+
+# -----------------------
 # ROUTES
 # -----------------------
 
@@ -77,12 +136,14 @@ def upload_file():
             filename,
             io.BytesIO(file_data),
             length=len(file_data),
+            content_type=get_content_type(filename)
         )
 
         files_col.insert_one({
             "filename": filename,
             "status": "pending",
             "size": len(file_data),
+            "content_type": get_content_type(filename),
             "created_at": datetime.utcnow(),
         })
 
@@ -136,11 +197,41 @@ def download_file(filename):
         return send_file(
             io.BytesIO(file_data),
             as_attachment=True,
-            download_name=filename
+            download_name=filename,
+            mimetype=get_content_type(filename)
         )
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
+
+@app.route("/preview/<filename>", methods=["GET"])
+def preview_file(filename):
+    """Preview file in browser (inline) from MinIO or S3"""
+    source = request.args.get("source", "minio")  # minio or s3
+    
+    try:
+        if source == "s3":
+            # Get from S3
+            obj = s3_client.get_object(Bucket=AWS_BUCKET, Key=filename)
+            file_data = obj['Body'].read()
+            content_type = obj.get('ContentType', get_content_type(filename))
+        else:
+            # Get from MinIO
+            minio_obj = minio_client.get_object(MINIO_BUCKET, filename)
+            file_data = minio_obj.read()
+            content_type = get_content_type(filename)
+            minio_obj.close()
+        
+        from flask import Response
+        return Response(
+            file_data,
+            content_type=content_type,
+            headers={
+                'Content-Disposition': f'inline; filename="{filename}"'
+            }
+        )
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
 # -----------------------
 # BACKGROUND SYNC THREAD
@@ -165,28 +256,28 @@ def sync_to_s3():
                     continue
 
                 try:
-                    s3_client.upload_fileobj(io.BytesIO(data), AWS_BUCKET, filename)
+                    s3_client.upload_fileobj(
+                        io.BytesIO(data), 
+                        AWS_BUCKET, 
+                        filename,
+                        ExtraArgs={'ContentType': get_content_type(filename)}
+                    )
                 except Exception as e:
                     print(f"❌ Failed to upload {filename} to S3: {e}")
                     continue
 
-                minio_url = minio_client.presigned_get_object(
-                    MINIO_BUCKET, filename, expires=timedelta(hours=1)
-                )
-                s3_url = s3_client.generate_presigned_url(
-                    "get_object",
-                    Params={"Bucket": AWS_BUCKET, "Key": filename},
-                    ExpiresIn=3600,
-                )
+                # Generate preview URLs
+                minio_preview_url, s3_preview_url = generate_preview_urls(filename)
 
-                # FIXED: Change status to "uploaded-to-s3" to match frontend
+                # Update database with preview URLs
                 files_col.update_one(
                     {"filename": filename},
                     {
                         "$set": {
-                            "status": "uploaded-to-s3",  # Changed from "uploaded"
-                            "minio_url": minio_url,
-                            "s3_url": s3_url,
+                            "status": "uploaded-to-s3",
+                            "minio_preview_url": minio_preview_url,
+                            "s3_preview_url": s3_preview_url,
+                            "content_type": get_content_type(filename),
                             "uploaded_at": datetime.utcnow(),
                         }
                     },

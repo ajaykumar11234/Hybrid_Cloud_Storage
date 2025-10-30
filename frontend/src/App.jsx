@@ -111,6 +111,16 @@ export default function App() {
     }
   };
 
+  const previewFile = async (filename, source) => {
+    try {
+      const previewUrl = `${BASE_URL}/preview/${filename}?source=${source}`;
+      window.open(previewUrl, '_blank');
+    } catch (err) {
+      console.error("Preview error:", err);
+      showNotification("Preview failed", "error");
+    }
+  };
+
   const handleDrag = (e) => {
     e.preventDefault();
     e.stopPropagation();
@@ -143,6 +153,28 @@ export default function App() {
     return date.toLocaleString();
   };
 
+  const getFileIcon = (filename) => {
+    const extension = filename.split('.').pop()?.toLowerCase();
+    const iconClass = "text-slate-400 flex-shrink-0";
+    
+    const iconMap = {
+      pdf: <File className={`${iconClass} text-red-500`} size={20} />,
+      jpg: <File className={`${iconClass} text-green-500`} size={20} />,
+      jpeg: <File className={`${iconClass} text-green-500`} size={20} />,
+      png: <File className={`${iconClass} text-blue-500`} size={20} />,
+      gif: <File className={`${iconClass} text-purple-500`} size={20} />,
+      txt: <File className={`${iconClass} text-slate-500`} size={20} />,
+      doc: <File className={`${iconClass} text-blue-600`} size={20} />,
+      docx: <File className={`${iconClass} text-blue-600`} size={20} />,
+      xls: <File className={`${iconClass} text-green-600`} size={20} />,
+      xlsx: <File className={`${iconClass} text-green-600`} size={20} />,
+      zip: <File className={`${iconClass} text-orange-500`} size={20} />,
+      rar: <File className={`${iconClass} text-orange-500`} size={20} />,
+    };
+    
+    return iconMap[extension] || <File className={iconClass} size={20} />;
+  };
+
   const filteredFiles = files.filter(f => {
     const matchesSearch = f.filename.toLowerCase().includes(searchTerm.toLowerCase());
     const matchesFilter = filterStatus === "all" || 
@@ -171,10 +203,17 @@ export default function App() {
           <div className="bg-white rounded-xl shadow-2xl max-w-2xl w-full max-h-[90vh] overflow-y-auto">
             {/* Modal Header */}
             <div className="sticky top-0 bg-white border-b border-slate-200 p-6 flex items-center justify-between">
-              <h2 className="text-2xl font-bold text-slate-800 flex items-center gap-2">
-                <File className="text-blue-600" size={28} />
-                File Details
-              </h2>
+              <div className="flex items-center gap-3">
+                {getFileIcon(selectedFile.filename)}
+                <div>
+                  <h2 className="text-2xl font-bold text-slate-800">
+                    File Details
+                  </h2>
+                  <p className="text-slate-600 text-sm mt-1 max-w-md truncate">
+                    {selectedFile.filename}
+                  </p>
+                </div>
+              </div>
               <button
                 onClick={() => setSelectedFile(null)}
                 className="p-2 hover:bg-slate-100 rounded-lg transition-colors"
@@ -195,7 +234,7 @@ export default function App() {
                 </p>
               </div>
 
-              {/* Status */}
+              {/* File Info Grid */}
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div className="bg-slate-50 rounded-lg p-4">
                   <label className="text-sm font-medium text-slate-600 mb-2 flex items-center gap-2">
@@ -223,23 +262,33 @@ export default function App() {
                     {formatFileSize(selectedFile.size)}
                   </p>
                 </div>
+
+                {selectedFile.content_type && (
+                  <div className="bg-slate-50 rounded-lg p-4">
+                    <label className="text-sm font-medium text-slate-600 mb-2 block">
+                      File Type
+                    </label>
+                    <p className="text-lg font-semibold text-slate-800 capitalize">
+                      {selectedFile.content_type.split('/')[1] || selectedFile.content_type}
+                    </p>
+                  </div>
+                )}
+
+                {selectedFile.uploaded_at && (
+                  <div className="bg-slate-50 rounded-lg p-4">
+                    <label className="text-sm font-medium text-slate-600 mb-2 flex items-center gap-2">
+                      <Calendar size={16} />
+                      Uploaded At
+                    </label>
+                    <p className="text-lg font-semibold text-slate-800">
+                      {formatDate(selectedFile.uploaded_at)}
+                    </p>
+                  </div>
+                )}
               </div>
 
-              {/* Upload Date */}
-              {selectedFile.uploaded_at && (
-                <div className="bg-slate-50 rounded-lg p-4">
-                  <label className="text-sm font-medium text-slate-600 mb-2 flex items-center gap-2">
-                    <Calendar size={16} />
-                    Uploaded At
-                  </label>
-                  <p className="text-lg font-semibold text-slate-800">
-                    {formatDate(selectedFile.uploaded_at)}
-                  </p>
-                </div>
-              )}
-
               {/* MinIO Actions */}
-              {selectedFile.minio_url && (
+              {selectedFile.minio_preview_url && (
                 <div className="bg-orange-50 border border-orange-200 rounded-lg p-4">
                   <label className="text-sm font-medium text-orange-800 mb-3 flex items-center gap-2">
                     <Server size={16} />
@@ -247,11 +296,18 @@ export default function App() {
                   </label>
                   <div className="flex flex-col sm:flex-row gap-2">
                     <button
-                      onClick={() => window.open(selectedFile.minio_url, '_blank')}
+                      onClick={() => window.open(selectedFile.minio_preview_url, '_blank')}
                       className="flex-1 flex items-center justify-center gap-2 px-4 py-2 bg-orange-600 hover:bg-orange-700 text-white rounded-lg transition-colors text-sm font-medium"
                     >
                       <ExternalLink size={16} />
-                      Open URL
+                      Preview File
+                    </button>
+                    <button
+                      onClick={() => previewFile(selectedFile.filename, 'minio')}
+                      className="flex-1 flex items-center justify-center gap-2 px-4 py-2 bg-orange-500 hover:bg-orange-600 text-white rounded-lg transition-colors text-sm font-medium"
+                    >
+                      <Link2 size={16} />
+                      Direct Preview
                     </button>
                     <button
                       onClick={() => downloadFile(selectedFile.filename, 'minio')}
@@ -265,7 +321,7 @@ export default function App() {
               )}
 
               {/* S3 Actions */}
-              {selectedFile.s3_url && (
+              {selectedFile.s3_preview_url && (
                 <div className="bg-green-50 border border-green-200 rounded-lg p-4">
                   <label className="text-sm font-medium text-green-800 mb-3 flex items-center gap-2">
                     <Cloud size={16} />
@@ -273,11 +329,18 @@ export default function App() {
                   </label>
                   <div className="flex flex-col sm:flex-row gap-2">
                     <button
-                      onClick={() => window.open(selectedFile.s3_url, '_blank')}
+                      onClick={() => window.open(selectedFile.s3_preview_url, '_blank')}
                       className="flex-1 flex items-center justify-center gap-2 px-4 py-2 bg-green-600 hover:bg-green-700 text-white rounded-lg transition-colors text-sm font-medium"
                     >
                       <ExternalLink size={16} />
-                      Open URL
+                      Preview File
+                    </button>
+                    <button
+                      onClick={() => previewFile(selectedFile.filename, 's3')}
+                      className="flex-1 flex items-center justify-center gap-2 px-4 py-2 bg-green-500 hover:bg-green-600 text-white rounded-lg transition-colors text-sm font-medium"
+                    >
+                      <Link2 size={16} />
+                      Direct Preview
                     </button>
                     <button
                       onClick={() => downloadFile(selectedFile.filename, 's3')}
@@ -291,11 +354,11 @@ export default function App() {
               )}
 
               {/* No URLs Available */}
-              {!selectedFile.minio_url && !selectedFile.s3_url && (
+              {!selectedFile.minio_preview_url && !selectedFile.s3_preview_url && (
                 <div className="bg-slate-50 border border-slate-200 rounded-lg p-4 text-center">
                   <Clock className="mx-auto mb-2 text-slate-400" size={32} />
                   <p className="text-slate-600 text-sm">
-                    File is being processed. URLs will be available once sync is complete.
+                    File is being processed. Preview URLs will be available once sync is complete.
                   </p>
                 </div>
               )}
@@ -330,7 +393,7 @@ export default function App() {
                 <Cloud className="text-blue-600" size={32} />
                 File Storage Manager
               </h1>
-              <p className="text-slate-600 mt-1">MinIO & AWS S3 Integration</p>
+              <p className="text-slate-600 mt-1">MinIO & AWS S3 Integration with File Preview</p>
             </div>
             <button
               onClick={fetchFiles}
@@ -378,9 +441,29 @@ export default function App() {
                   </>
                 )}
               </p>
-              <p className="text-sm text-slate-400">All file types supported</p>
+              <p className="text-sm text-slate-400">Supports images, PDFs, text files, and more</p>
             </label>
           </div>
+
+          {file && (
+            <div className="mt-4 p-4 bg-blue-50 rounded-lg border border-blue-200">
+              <div className="flex items-center gap-3">
+                {getFileIcon(file.name)}
+                <div className="flex-1">
+                  <p className="font-medium text-slate-800">{file.name}</p>
+                  <p className="text-sm text-slate-600">
+                    Size: {formatFileSize(file.size)}
+                  </p>
+                </div>
+                <button
+                  onClick={() => setFile(null)}
+                  className="p-1 hover:bg-blue-100 rounded transition-colors"
+                >
+                  <X size={16} className="text-slate-600" />
+                </button>
+              </div>
+            </div>
+          )}
 
           {uploadProgress > 0 && (
             <div className="mt-4">
@@ -403,7 +486,7 @@ export default function App() {
             className="mt-4 w-full flex items-center justify-center gap-2 px-6 py-3 bg-gradient-to-r from-blue-600 to-blue-700 hover:from-blue-700 hover:to-blue-800 text-white rounded-lg transition-all disabled:opacity-50 disabled:cursor-not-allowed font-medium"
           >
             <Upload size={20} />
-            Upload File
+            {uploadProgress > 0 ? 'Uploading...' : 'Upload File'}
           </button>
         </div>
 
@@ -414,10 +497,10 @@ export default function App() {
               <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-slate-400" size={18} />
               <input
                 type="text"
-                placeholder="Search files..."
+                placeholder="Search files by name..."
                 value={searchTerm}
                 onChange={(e) => setSearchTerm(e.target.value)}
-                className="w-full pl-10 pr-4 py-2 border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+                className="w-full pl-10 pr-4 py-2 border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
               />
             </div>
             <div className="flex items-center gap-2">
@@ -425,7 +508,7 @@ export default function App() {
               <select
                 value={filterStatus}
                 onChange={(e) => setFilterStatus(e.target.value)}
-                className="px-4 py-2 border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+                className="px-4 py-2 border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent bg-white"
               >
                 <option value="all">All Files</option>
                 <option value="s3">AWS S3 Only</option>
@@ -437,10 +520,20 @@ export default function App() {
 
         {/* Files List */}
         <div className="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden">
-          <div className="p-4 border-b border-slate-200 bg-slate-50">
+          <div className="p-4 border-b border-slate-200 bg-slate-50 flex items-center justify-between">
             <h2 className="text-lg font-semibold text-slate-800">
               Files ({filteredFiles.length})
             </h2>
+            <div className="flex items-center gap-2 text-sm text-slate-600">
+              <div className="flex items-center gap-1">
+                <div className="w-2 h-2 bg-orange-500 rounded-full"></div>
+                <span>MinIO Only</span>
+              </div>
+              <div className="flex items-center gap-1">
+                <div className="w-2 h-2 bg-green-500 rounded-full"></div>
+                <span>S3 Synced</span>
+              </div>
+            </div>
           </div>
           
           {loading ? (
@@ -452,7 +545,12 @@ export default function App() {
             <div className="p-12 text-center">
               <File className="mx-auto mb-3 text-slate-300" size={48} />
               <p className="text-slate-600">No files found.</p>
-              <p className="text-sm text-slate-400 mt-1">Upload your first file to get started</p>
+              <p className="text-sm text-slate-400 mt-1">
+                {searchTerm || filterStatus !== "all" 
+                  ? "Try adjusting your search or filter" 
+                  : "Upload your first file to get started"
+                }
+              </p>
             </div>
           ) : (
             <div className="divide-y divide-slate-200">
@@ -460,54 +558,86 @@ export default function App() {
                 <div
                   key={f.filename}
                   onClick={() => setSelectedFile(f)}
-                  className="p-4 hover:bg-slate-50 transition-colors cursor-pointer"
+                  className="p-4 hover:bg-slate-50 transition-colors cursor-pointer group"
                 >
                   <div className="flex items-start justify-between gap-4">
                     <div className="flex-1 min-w-0">
-                      <div className="flex items-center gap-2 mb-2">
-                        <File className="text-slate-400 flex-shrink-0" size={20} />
-                        <h3 className="font-semibold text-slate-800 truncate">
-                          {f.filename}
-                        </h3>
+                      <div className="flex items-center gap-3 mb-2">
+                        {getFileIcon(f.filename)}
+                        <div className="flex-1 min-w-0">
+                          <h3 className="font-semibold text-slate-800 truncate group-hover:text-blue-600 transition-colors">
+                            {f.filename}
+                          </h3>
+                        </div>
                       </div>
                       
                       <div className="flex flex-wrap items-center gap-3 text-sm">
                         {f.status === "uploaded-to-s3" ? (
-                          <span className="flex items-center gap-1 text-green-600 bg-green-50 px-2 py-1 rounded">
+                          <span className="flex items-center gap-1 text-green-600 bg-green-50 px-2 py-1 rounded-full text-xs font-medium">
                             <CheckCircle size={14} />
-                            Uploaded to S3
+                            Synced to S3
                           </span>
                         ) : (
-                          <span className="flex items-center gap-1 text-orange-600 bg-orange-50 px-2 py-1 rounded">
+                          <span className="flex items-center gap-1 text-orange-600 bg-orange-50 px-2 py-1 rounded-full text-xs font-medium">
                             <Clock size={14} />
-                            Pending in MinIO
+                            MinIO Only
                           </span>
                         )}
                         {f.size && (
                           <span className="text-slate-500">{formatFileSize(f.size)}</span>
                         )}
+                        {f.uploaded_at && (
+                          <span className="text-slate-400 text-xs">
+                            {formatDate(f.uploaded_at)}
+                          </span>
+                        )}
                       </div>
                       
-                      <p className="text-xs text-slate-400 mt-2">
-                        Click to view details
+                      <p className="text-xs text-slate-400 mt-2 flex items-center gap-1">
+                        <Link2 size={12} />
+                        Click to view details and preview
                       </p>
                     </div>
                     
-                    <button
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        deleteFile(f.filename);
-                      }}
-                      className="flex items-center gap-1 px-3 py-2 bg-red-50 hover:bg-red-100 text-red-600 rounded-lg transition-colors flex-shrink-0"
-                    >
-                      <Trash2 size={16} />
-                      Delete
-                    </button>
+                    <div className="flex items-center gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          if (f.minio_preview_url) {
+                            window.open(f.minio_preview_url, '_blank');
+                          } else if (f.s3_preview_url) {
+                            window.open(f.s3_preview_url, '_blank');
+                          } else {
+                            previewFile(f.filename, 'minio');
+                          }
+                        }}
+                        className="flex items-center gap-1 px-3 py-2 bg-blue-50 hover:bg-blue-100 text-blue-600 rounded-lg transition-colors flex-shrink-0 text-sm"
+                        title="Preview file"
+                      >
+                        <ExternalLink size={14} />
+                        Preview
+                      </button>
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          deleteFile(f.filename);
+                        }}
+                        className="flex items-center gap-1 px-3 py-2 bg-red-50 hover:bg-red-100 text-red-600 rounded-lg transition-colors flex-shrink-0 text-sm"
+                      >
+                        <Trash2 size={14} />
+                        Delete
+                      </button>
+                    </div>
                   </div>
                 </div>
               ))}
             </div>
           )}
+        </div>
+
+        {/* Footer */}
+        <div className="mt-8 text-center text-slate-500 text-sm">
+          <p>File Storage Manager • Supports preview for images, PDFs, text files, and more</p>
         </div>
       </div>
     </div>
