@@ -1,0 +1,38 @@
+# === Python / Flask Backend ===
+
+# Virtual environment
+venv/
+ENV/
+env/
+.venv/
+
+# Environment files
+.env
+
+# Python cache and compiled files
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Flask / Database / Logs
+instance/
+*.db
+*.sqlite3
+*.sqlite
+*.log
+migrations/
+
+# Temporary / build / test files
+*.tmp
+*.bak
+*.swp
+*.swo
+
+# OS generated files
+.DS_Store
+Thumbs.db
+
+# IDE specific
+.vscode/
+.idea/
