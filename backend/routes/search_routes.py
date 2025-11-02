@@ -1,122 +1,151 @@
 from flask import request, jsonify
 from services.service_manager import service_manager
-from datetime import datetime, timedelta
+import logging
+
+logger = logging.getLogger(__name__)
 
 def setup_search_routes(app):
-    """Setup enhanced search and analytics routes"""
+    """Setup simplified search routes for basic filtering"""
     
     @app.route("/search", methods=["GET"])
     def search_files():
-        """Search files by text query"""
-        query = request.args.get("q", "")
-        search_type = request.args.get("type", "text")  # text, tags, date
+        """Simple search by filename or keywords"""
+        query = request.args.get("q", "").strip()
         
         try:
-            if search_type == "tags":
-                tags = [tag.strip() for tag in query.split(",") if tag.strip()]
-                results = service_manager.mongodb.search_files_by_tags(tags)
-            elif search_type == "date":
-                # Date range search (format: YYYY-MM-DD to YYYY-MM-DD)
-                date_range = query.split(" to ")
-                if len(date_range) == 2:
-                    start_date = datetime.strptime(date_range[0].strip(), "%Y-%m-%d")
-                    end_date = datetime.strptime(date_range[1].strip(), "%Y-%m-%d")
-                    results = service_manager.mongodb.search_files_by_date_range(start_date, end_date)
-                else:
-                    results = []
+            if not query:
+                # If no query, return all files
+                results = service_manager.mongodb.get_all_files()
             else:
-                # Text search
-                results = service_manager.mongodb.search_files(query)
+                # Search in filename and keywords
+                results = []
+                all_files = service_manager.mongodb.get_all_files()
+                
+                for file in all_files:
+                    filename = file.get('filename', '').lower()
+                    
+                    # Search in filename
+                    if query.lower() in filename:
+                        results.append(file)
+                        continue
+                    
+                    # Search in keywords
+                    keywords = file.get('ai_analysis', {}).get('keywords', [])
+                    keyword_matches = any(
+                        query.lower() in str(kw).lower() 
+                        for kw in keywords
+                    )
+                    
+                    if keyword_matches:
+                        results.append(file)
             
             return jsonify({
                 "results": results,
                 "count": len(results),
-                "query": query,
-                "search_type": search_type
+                "query": query
             }), 200
             
         except Exception as e:
-            return jsonify({"error": str(e)}), 500
+            logger.error(f"Search error: {e}")
+            return jsonify({"error": str(e), "results": [], "count": 0}), 500
     
-    @app.route("/analytics/uploads", methods=["GET"])
-    def get_upload_analytics():
-        """Get upload statistics"""
-        days = int(request.args.get("days", 30))
+    @app.route("/search/filename", methods=["GET"])
+    def search_by_filename():
+        """Search files by filename only"""
+        query = request.args.get("q", "").strip()
         
         try:
-            stats = service_manager.mongodb.get_upload_stats(days)
-            return jsonify(stats), 200
-        except Exception as e:
-            return jsonify({"error": str(e)}), 500
-    
-    @app.route("/analytics/tags", methods=["GET"])
-    def get_tag_analytics():
-        """Get tag statistics"""
-        limit = int(request.args.get("limit", 10))
-        
-        try:
-            tags = service_manager.mongodb.get_top_tags(limit)
-            return jsonify(tags), 200
-        except Exception as e:
-            return jsonify({"error": str(e)}), 500
-    
-    @app.route("/analytics/storage", methods=["GET"])
-    def get_storage_analytics():
-        """Get storage statistics"""
-        try:
-            stats = service_manager.mongodb.get_storage_stats()
-            file_types = service_manager.mongodb.get_file_type_stats()
+            if not query:
+                return jsonify({"error": "Query parameter 'q' is required"}), 400
+            
+            results = []
+            all_files = service_manager.mongodb.get_all_files()
+            
+            for file in all_files:
+                filename = file.get('filename', '').lower()
+                if query.lower() in filename:
+                    results.append(file)
             
             return jsonify({
-                "storage": stats,
-                "file_types": file_types
+                "results": results,
+                "count": len(results),
+                "query": query
             }), 200
+            
         except Exception as e:
-            return jsonify({"error": str(e)}), 500
+            logger.error(f"Filename search error: {e}")
+            return jsonify({"error": str(e), "results": [], "count": 0}), 500
     
-    @app.route("/analytics/activity", methods=["GET"])
-    def get_activity_analytics():
-        """Get recent activity"""
-        hours = int(request.args.get("hours", 24))
-        event_type = request.args.get("event_type")
+    @app.route("/search/keywords", methods=["GET"])
+    def search_by_keywords():
+        """Search files by keywords only"""
+        query = request.args.get("q", "").strip()
         
         try:
-            activity = service_manager.mongodb.get_recent_activity(hours)
-            if event_type:
-                activity = [log for log in activity if log.get("event_type") == event_type]
+            if not query:
+                return jsonify({"error": "Query parameter 'q' is required"}), 400
             
-            return jsonify(activity), 200
+            results = []
+            all_files = service_manager.mongodb.get_all_files()
+            
+            for file in all_files:
+                keywords = file.get('ai_analysis', {}).get('keywords', [])
+                keyword_matches = any(
+                    query.lower() in str(kw).lower() 
+                    for kw in keywords
+                )
+                
+                if keyword_matches:
+                    results.append(file)
+            
+            return jsonify({
+                "results": results,
+                "count": len(results),
+                "query": query
+            }), 200
+            
         except Exception as e:
-            return jsonify({"error": str(e)}), 500
+            logger.error(f"Keyword search error: {e}")
+            return jsonify({"error": str(e), "results": [], "count": 0}), 500
     
-    @app.route("/files/<filename>/tags", methods=["POST"])
-    def update_file_tags(filename):
-        """Update tags for a file"""
-        data = request.get_json()
-        if not data:
-            return jsonify({"error": "No JSON data provided"}), 400
-            
-        tags = data.get("tags", [])
+    @app.route("/files", methods=["GET"])
+    def get_all_files_route():
+        """Get all files with optional filtering"""
+        filename_filter = request.args.get("filename", "").strip()
+        keyword_filter = request.args.get("keyword", "").strip()
         
         try:
-            if not isinstance(tags, list):
-                return jsonify({"error": "Tags must be a list"}), 400
+            all_files = service_manager.mongodb.get_all_files()
+            filtered_files = []
             
-            success = service_manager.mongodb.update_file(filename, {"tags": tags})
+            for file in all_files:
+                # Apply filename filter
+                if filename_filter:
+                    filename = file.get('filename', '').lower()
+                    if filename_filter.lower() not in filename:
+                        continue
+                
+                # Apply keyword filter
+                if keyword_filter:
+                    keywords = file.get('ai_analysis', {}).get('keywords', [])
+                    keyword_matches = any(
+                        keyword_filter.lower() in str(kw).lower() 
+                        for kw in keywords
+                    )
+                    if not keyword_matches:
+                        continue
+                
+                filtered_files.append(file)
             
-            if success:
-                # Log the tag update
-                service_manager.mongodb.log_event({
-                    "event_type": "tag_update",
-                    "resource": filename,
-                    "user": "system",
-                    "timestamp": datetime.utcnow(),
-                    "details": {"tags": tags}
-                })
-                
-                return jsonify({"message": "Tags updated successfully", "tags": tags}), 200
-            else:
-                return jsonify({"error": "File not found"}), 404
-                
+            return jsonify({
+                "files": filtered_files,
+                "count": len(filtered_files),
+                "filters": {
+                    "filename": filename_filter,
+                    "keyword": keyword_filter
+                }
+            }), 200
+            
         except Exception as e:
-            return jsonify({"error": str(e)}), 500
+            logger.error(f"Files filtering error: {e}")
+            return jsonify({"error": str(e), "files": [], "count": 0}), 500

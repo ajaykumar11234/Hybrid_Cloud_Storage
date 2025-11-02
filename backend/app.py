@@ -5,6 +5,7 @@ from utils.background_tasks import start_background_threads
 from routes.upload_routes import setup_upload_routes
 from routes.file_routes import setup_file_routes
 from routes.analysis_routes import setup_analysis_routes
+from routes.analytics_routes import setup_analytics_routes
 from routes.download_routes import setup_download_routes
 
 def create_app():
@@ -17,6 +18,7 @@ def create_app():
     
     # Setup routes
     setup_upload_routes(app)
+    setup_analytics_routes(app)
     setup_file_routes(app)
     setup_analysis_routes(app)
     setup_download_routes(app)

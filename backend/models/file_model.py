@@ -13,9 +13,9 @@ class FileMetadata:
         self.minio_download_url: Optional[str] = None
         self.s3_preview_url: Optional[str] = None
         self.s3_download_url: Optional[str] = None
-        self.created_at = datetime.utcnow()
-        self.minio_uploaded_at = datetime.utcnow()
-        self.s3_synced_at: Optional[datetime] = None
+        self.created_at = datetime.utcnow().isoformat()  # Store as string
+        self.minio_uploaded_at = datetime.utcnow().isoformat()  # Store as string
+        self.s3_synced_at: Optional[str] = None
         self.ai_analysis_status = "pending"
         self.ai_analysis: Optional[Dict] = None
     
@@ -30,8 +30,8 @@ class FileMetadata:
             "minio_download_url": self.minio_download_url,
             "s3_preview_url": self.s3_preview_url,
             "s3_download_url": self.s3_download_url,
-            "created_at": self.created_at,
-            "minio_uploaded_at": self.minio_uploaded_at,
+            "created_at": self.created_at,  # Already string
+            "minio_uploaded_at": self.minio_uploaded_at,  # Already string
             "s3_synced_at": self.s3_synced_at,
             "ai_analysis_status": self.ai_analysis_status,
             "ai_analysis": self.ai_analysis
@@ -50,8 +50,8 @@ class FileMetadata:
         file_meta.minio_download_url = data.get("minio_download_url")
         file_meta.s3_preview_url = data.get("s3_preview_url")
         file_meta.s3_download_url = data.get("s3_download_url")
-        file_meta.created_at = data.get("created_at", datetime.utcnow())
-        file_meta.minio_uploaded_at = data.get("minio_uploaded_at", datetime.utcnow())
+        file_meta.created_at = data.get("created_at", datetime.utcnow().isoformat())
+        file_meta.minio_uploaded_at = data.get("minio_uploaded_at", datetime.utcnow().isoformat())
         file_meta.s3_synced_at = data.get("s3_synced_at")
         file_meta.ai_analysis_status = data.get("ai_analysis_status", "pending")
         file_meta.ai_analysis = data.get("ai_analysis")

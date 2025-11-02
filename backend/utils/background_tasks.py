@@ -1,7 +1,10 @@
 import time
 import threading
-from datetime import datetime, timedelta
+from datetime import datetime
 from services.service_manager import service_manager
+import logging
+
+logger = logging.getLogger(__name__)
 
 def start_background_threads():
     """Start all background threads"""
@@ -24,9 +27,9 @@ def sync_to_s3_worker():
     while True:
         try:
             # Get files that are in MinIO but not yet in S3
-            files_dict = service_manager.mongodb.get_all_files()
+            files = service_manager.mongodb.get_all_files()
             
-            for file_data in files_dict:
+            for file_data in files:
                 if file_data.get("status") == "minio" and service_manager.s3.is_available():
                     filename = file_data["filename"]
                     print(f"🔄 Syncing {filename} to S3...")
@@ -46,13 +49,13 @@ def sync_to_s3_worker():
                             "status": "uploaded-to-s3",
                             "s3_preview_url": s3_preview_url,
                             "s3_download_url": s3_download_url,
-                            "s3_synced_at": datetime.utcnow()
+                            "s3_synced_at": datetime.utcnow().isoformat()
                         }
                         service_manager.mongodb.update_file(filename, update_data)
                         print(f"✅ Synced {filename} → AWS S3")
                     
         except Exception as e:
-            print(f"❌ Error in S3 sync worker: {e}")
+            logger.error(f"Error in S3 sync worker: {e}")
         
         time.sleep(30)  # Check every 30 seconds
 
@@ -103,6 +106,6 @@ def ai_analysis_worker():
                     service_manager.mongodb.update_file(filename, update_data)
                     
         except Exception as e:
-            print(f"❌ Error in AI analysis worker: {e}")
+            logger.error(f"Error in AI analysis worker: {e}")
         
         time.sleep(60)  # Check every minute

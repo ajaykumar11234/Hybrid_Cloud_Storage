@@ -1,9 +1,12 @@
 import { useState, useEffect } from "react";
-import { Upload, RefreshCw, Trash2, File, Cloud, CheckCircle, Clock, Search, Filter, Download, AlertCircle, X, Calendar, Link2, Server, ExternalLink, RotateCw, Brain, Sparkles, Tag, FileText, Image as ImageIcon, Zap } from "lucide-react";
+import { Upload, RefreshCw, Trash2, File, Cloud, CheckCircle, Clock, Search, Filter, Download, AlertCircle, X, Calendar, Link2, Server, ExternalLink, RotateCw, Brain, Sparkles, Tag, FileText, Image as ImageIcon, Zap, BarChart3 } from "lucide-react";
+import Dashboard from "./components/Dashboard";
+import EnhancedSearch from "./components/EnhancedSearch";
 
 export default function App() {
   const [file, setFile] = useState(null);
   const [files, setFiles] = useState([]);
+  const [filteredFiles, setFilteredFiles] = useState([]);
   const [loading, setLoading] = useState(false);
   const [uploadProgress, setUploadProgress] = useState(0);
   const [searchTerm, setSearchTerm] = useState("");
@@ -13,12 +16,17 @@ export default function App() {
   const [selectedFile, setSelectedFile] = useState(null);
   const [refreshingUrls, setRefreshingUrls] = useState({});
   const [analyzingFiles, setAnalyzingFiles] = useState({});
+  const [currentView, setCurrentView] = useState("files");
 
   const BASE_URL = "http://localhost:5000";
 
   useEffect(() => {
     fetchFiles();
   }, []);
+
+  useEffect(() => {
+    setFilteredFiles(files);
+  }, [files]);
 
   const showNotification = (message, type = "success") => {
     setNotification({ message, type });
@@ -29,13 +37,19 @@ export default function App() {
     setLoading(true);
     try {
       const res = await fetch(`${BASE_URL}/files`);
+      if (!res.ok) throw new Error("Failed to fetch files");
       const data = await res.json();
       setFiles(data);
+      setFilteredFiles(data);
     } catch (err) {
       console.error("Error fetching files:", err);
       showNotification("Failed to fetch files", "error");
     }
     setLoading(false);
+  };
+
+  const handleSearchResults = (results) => {
+    setFilteredFiles(results);
   };
 
   const uploadFile = async () => {
@@ -48,7 +62,9 @@ export default function App() {
     formData.append("file", file);
 
     try {
-      setUploadProgress(50);
+      setLoading(true);
+      setUploadProgress(30);
+      
       const res = await fetch(`${BASE_URL}/upload`, {
         method: "POST",
         body: formData,
@@ -62,7 +78,7 @@ export default function App() {
       setTimeout(() => {
         setFile(null);
         setUploadProgress(0);
-        fetchFiles(); // Refresh files list
+        fetchFiles();
         showNotification(
           result.ai_analysis_queued 
             ? "File uploaded successfully! AI analysis in progress..." 
@@ -74,6 +90,8 @@ export default function App() {
       console.error("Upload error:", err);
       setUploadProgress(0);
       showNotification("Upload failed", "error");
+    } finally {
+      setLoading(false);
     }
   };
 
@@ -87,7 +105,7 @@ export default function App() {
       if (!res.ok) throw new Error("Analysis failed");
       
       const result = await res.json();
-      await fetchFiles(); // Refresh files list
+      await fetchFiles();
       showNotification("AI analysis completed!", "success");
     } catch (err) {
       console.error("Analysis error:", err);
@@ -120,19 +138,15 @@ export default function App() {
 
   const downloadFile = async (filename, source) => {
     try {
-      // Use direct MinIO/S3 URLs if available, otherwise fallback to backend
       const fileData = files.find(f => f.filename === filename);
       
       if (source === 'minio' && fileData?.minio_download_url) {
-        // Use MinIO direct URL
         window.open(fileData.minio_download_url, '_blank');
         showNotification(`Downloading ${filename} from MinIO...`, "success");
       } else if (source === 's3' && fileData?.s3_download_url) {
-        // Use S3 direct URL
         window.open(fileData.s3_download_url, '_blank');
         showNotification(`Downloading ${filename} from S3...`, "success");
       } else {
-        // Fallback to backend download
         const res = await fetch(`${BASE_URL}/download/${filename}?source=${source}`);
         if (!res.ok) throw new Error("Download failed");
         
@@ -159,13 +173,10 @@ export default function App() {
       const fileData = files.find(f => f.filename === filename);
       
       if (source === 'minio' && fileData?.minio_preview_url) {
-        // Use MinIO direct preview URL
         window.open(fileData.minio_preview_url, '_blank');
       } else if (source === 's3' && fileData?.s3_preview_url) {
-        // Use S3 direct preview URL
         window.open(fileData.s3_preview_url, '_blank');
       } else {
-        // Fallback to backend preview
         const previewUrl = `${BASE_URL}/preview/${filename}?source=${source}`;
         window.open(previewUrl, '_blank');
       }
@@ -184,7 +195,7 @@ export default function App() {
       
       if (!res.ok) throw new Error("Refresh failed");
       
-      await fetchFiles(); // Refresh the files list
+      await fetchFiles();
       showNotification("URLs refreshed successfully", "success");
     } catch (err) {
       console.error("Refresh error:", err);
@@ -250,24 +261,323 @@ export default function App() {
     return iconMap[extension] || <File className={iconClass} size={20} />;
   };
 
-  const getAnalysisStatus = (file) => {
-    if (!file.ai_analysis_status) return "not_supported";
-    return file.ai_analysis_status; // pending, completed, failed
-  };
-
   const isFileTypeSupportedForAI = (filename) => {
     const extension = filename.split('.').pop()?.toLowerCase();
     const supportedTypes = ['pdf', 'txt', 'jpg', 'jpeg', 'png', 'gif', 'csv', 'json', 'xml'];
     return supportedTypes.includes(extension);
   };
 
-  const filteredFiles = files.filter(f => {
-    const matchesSearch = f.filename.toLowerCase().includes(searchTerm.toLowerCase());
-    const matchesFilter = filterStatus === "all" || 
-      (filterStatus === "s3" && f.status === "uploaded-to-s3") ||
-      (filterStatus === "minio" && f.status === "minio");
-    return matchesSearch && matchesFilter;
-  });
+  // Navigation Component
+  const Navigation = () => (
+    <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-6 mb-6">
+      <div className="flex items-center justify-between">
+        <div>
+          <h1 className="text-3xl font-bold text-slate-800 flex items-center gap-3">
+            <Brain className="text-purple-600" size={32} />
+            AI-Powered File Storage Manager
+          </h1>
+          <p className="text-slate-600 mt-1">
+            MinIO & AWS S3 Integration • AI-Powered Analysis • Instant Preview & Download
+          </p>
+        </div>
+        <div className="flex items-center gap-4">
+          <button
+            onClick={fetchFiles}
+            disabled={loading}
+            className="flex items-center gap-2 px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg transition-colors disabled:opacity-50"
+          >
+            <RefreshCw size={18} className={loading ? "animate-spin" : ""} />
+            Refresh
+          </button>
+        </div>
+      </div>
+      
+      {/* View Toggle */}
+      <div className="flex border-b border-slate-200 mt-4">
+        <button
+          onClick={() => setCurrentView("files")}
+          className={`flex items-center gap-2 px-4 py-2 border-b-2 transition-colors ${
+            currentView === "files" 
+              ? "border-blue-500 text-blue-600" 
+              : "border-transparent text-slate-500 hover:text-slate-700"
+          }`}
+        >
+          <File size={18} />
+          File Manager
+        </button>
+        <button
+          onClick={() => setCurrentView("dashboard")}
+          className={`flex items-center gap-2 px-4 py-2 border-b-2 transition-colors ${
+            currentView === "dashboard" 
+              ? "border-blue-500 text-blue-600" 
+              : "border-transparent text-slate-500 hover:text-slate-700"
+          }`}
+        >
+          <BarChart3 size={18} />
+          Analytics Dashboard
+        </button>
+      </div>
+    </div>
+  );
+
+  // File Manager View
+  const FileManagerView = () => (
+    <>
+      {/* Enhanced Search */}
+      <EnhancedSearch 
+        onSearchResults={handleSearchResults}
+        BASE_URL={BASE_URL}
+        files={files}
+      />
+
+      {/* Upload Section */}
+      <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-6 mb-6">
+        <h2 className="text-xl font-semibold text-slate-800 mb-4 flex items-center gap-2">
+          <Upload size={22} />
+          Upload File
+        </h2>
+        
+        <div
+          onDragEnter={handleDrag}
+          onDragLeave={handleDrag}
+          onDragOver={handleDrag}
+          onDrop={handleDrop}
+          className={`border-2 border-dashed rounded-lg p-8 text-center transition-all ${
+            dragActive 
+              ? "border-blue-500 bg-blue-50" 
+              : "border-slate-300 bg-slate-50"
+          }`}
+        >
+          <input
+            type="file"
+            id="fileInput"
+            onChange={(e) => setFile(e.target.files[0])}
+            className="hidden"
+          />
+          <label htmlFor="fileInput" className="cursor-pointer">
+            <File className="mx-auto mb-3 text-slate-400" size={48} />
+            <p className="text-slate-600 mb-2">
+              {file ? (
+                <span className="font-semibold text-blue-600">{file.name}</span>
+              ) : (
+                <>
+                  Drag & drop your file here or <span className="text-blue-600">click to browse</span>
+                </>
+              )}
+            </p>
+            <p className="text-sm text-slate-400">
+              Supports AI analysis for PDFs, images, and text files
+            </p>
+          </label>
+        </div>
+
+        {file && (
+          <div className="mt-4 p-4 bg-blue-50 rounded-lg border border-blue-200">
+            <div className="flex items-center gap-3">
+              {getFileIcon(file.name)}
+              <div className="flex-1">
+                <p className="font-medium text-slate-800">{file.name}</p>
+                <p className="text-sm text-slate-600">
+                  Size: {formatFileSize(file.size)}
+                  {isFileTypeSupportedForAI(file.name) && (
+                    <span className="ml-2 text-purple-600 flex items-center gap-1">
+                      <Brain size={12} />
+                      AI Analysis Available
+                    </span>
+                  )}
+                </p>
+              </div>
+              <button
+                onClick={() => setFile(null)}
+                className="p-1 hover:bg-blue-100 rounded transition-colors"
+              >
+                <X size={16} className="text-slate-600" />
+              </button>
+            </div>
+          </div>
+        )}
+
+        {uploadProgress > 0 && (
+          <div className="mt-4">
+            <div className="flex justify-between text-sm text-slate-600 mb-2">
+              <span>Uploading...</span>
+              <span>{uploadProgress}%</span>
+            </div>
+            <div className="w-full bg-slate-200 rounded-full h-2 overflow-hidden">
+              <div
+                className="bg-gradient-to-r from-blue-500 to-blue-600 h-full transition-all duration-300"
+                style={{ width: `${uploadProgress}%` }}
+              ></div>
+            </div>
+          </div>
+        )}
+
+        <button
+          onClick={uploadFile}
+          disabled={!file || loading}
+          className="mt-4 w-full flex items-center justify-center gap-2 px-6 py-3 bg-gradient-to-r from-blue-600 to-blue-700 hover:from-blue-700 hover:to-blue-800 text-white rounded-lg transition-all disabled:opacity-50 disabled:cursor-not-allowed font-medium"
+        >
+          <Upload size={20} />
+          {loading ? 'Uploading...' : 'Upload File'}
+        </button>
+      </div>
+
+      {/* Files List */}
+      <div className="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden">
+        <div className="p-4 border-b border-slate-200 bg-slate-50 flex items-center justify-between">
+          <h2 className="text-lg font-semibold text-slate-800">
+            Files ({filteredFiles.length})
+          </h2>
+          <div className="flex items-center gap-4 text-sm text-slate-600">
+            <div className="flex items-center gap-2">
+              <div className="flex items-center gap-1">
+                <div className="w-2 h-2 bg-orange-500 rounded-full"></div>
+                <span>MinIO Only</span>
+              </div>
+              <div className="flex items-center gap-1">
+                <div className="w-2 h-2 bg-green-500 rounded-full"></div>
+                <span>S3 Synced</span>
+              </div>
+            </div>
+            <div className="flex items-center gap-1 text-purple-600">
+              <Brain size={16} />
+              <span>AI Analyzed</span>
+            </div>
+          </div>
+        </div>
+        
+        {loading ? (
+          <div className="p-12 text-center">
+            <RefreshCw className="animate-spin mx-auto mb-3 text-blue-600" size={32} />
+            <p className="text-slate-600">Loading files...</p>
+          </div>
+        ) : filteredFiles.length === 0 ? (
+          <div className="p-12 text-center">
+            <File className="mx-auto mb-3 text-slate-300" size={48} />
+            <p className="text-slate-600">No files found.</p>
+            <p className="text-sm text-slate-400 mt-1">
+              {files.length === 0 ? "Upload your first file to get started" : "Try adjusting your search criteria"}
+            </p>
+          </div>
+        ) : (
+          <div className="divide-y divide-slate-200">
+            {filteredFiles.map((f) => (
+              <div
+                key={f.filename}
+                onClick={() => setSelectedFile(f)}
+                className="p-4 hover:bg-slate-50 transition-colors cursor-pointer group"
+              >
+                <div className="flex items-start justify-between gap-4">
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-3 mb-2">
+                      {getFileIcon(f.filename)}
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center gap-2">
+                          <h3 className="font-semibold text-slate-800 truncate group-hover:text-blue-600 transition-colors">
+                            {f.filename}
+                          </h3>
+                          {f.ai_analysis && (
+                            <Brain size={14} className="text-purple-500 flex-shrink-0" title="AI Analyzed" />
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                    
+                    <div className="flex flex-wrap items-center gap-3 text-sm">
+                      {f.status === "uploaded-to-s3" ? (
+                        <span className="flex items-center gap-1 text-green-600 bg-green-50 px-2 py-1 rounded-full text-xs font-medium">
+                          <CheckCircle size={14} />
+                          Synced to S3
+                        </span>
+                      ) : (
+                        <span className="flex items-center gap-1 text-orange-600 bg-orange-50 px-2 py-1 rounded-full text-xs font-medium">
+                          <Clock size={14} />
+                          MinIO Only
+                        </span>
+                      )}
+                      {f.size && (
+                        <span className="text-slate-500">{formatFileSize(f.size)}</span>
+                      )}
+                      {f.minio_uploaded_at && (
+                        <span className="text-slate-400 text-xs">
+                          Uploaded: {formatDate(f.minio_uploaded_at)}
+                        </span>
+                      )}
+                    </div>
+
+                    {/* AI Analysis Preview */}
+                    {f.ai_analysis && (
+                      <div className="mt-2 flex flex-wrap items-center gap-2">
+                        {f.ai_analysis.keywords && f.ai_analysis.keywords.slice(0, 3).map((keyword, index) => (
+                          <span 
+                            key={index}
+                            className="bg-purple-100 text-purple-700 px-2 py-1 rounded text-xs"
+                          >
+                            {keyword}
+                          </span>
+                        ))}
+                        {f.ai_analysis.keywords && f.ai_analysis.keywords.length > 3 && (
+                          <span className="text-purple-600 text-xs">
+                            +{f.ai_analysis.keywords.length - 3} more
+                          </span>
+                        )}
+                      </div>
+                    )}
+                    
+                    <p className="text-xs text-slate-400 mt-2 flex items-center gap-1">
+                      <Link2 size={12} />
+                      {f.ai_analysis 
+                        ? "Click to view AI insights & file options" 
+                        : "Click to view file details and options"
+                      }
+                    </p>
+                  </div>
+                  
+                  <div className="flex items-center gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
+                    {isFileTypeSupportedForAI(f.filename) && !f.ai_analysis && (
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          analyzeFile(f.filename);
+                        }}
+                        disabled={analyzingFiles[f.filename]}
+                        className="flex items-center gap-1 px-3 py-2 bg-purple-50 hover:bg-purple-100 text-purple-600 rounded-lg transition-colors flex-shrink-0 text-sm"
+                        title="Analyze with AI"
+                      >
+                        <Zap size={14} className={analyzingFiles[f.filename] ? "animate-spin" : ""} />
+                        {analyzingFiles[f.filename] ? "..." : "AI"}
+                      </button>
+                    )}
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        previewFile(f.filename, 'minio');
+                      }}
+                      className="flex items-center gap-1 px-3 py-2 bg-blue-50 hover:bg-blue-100 text-blue-600 rounded-lg transition-colors flex-shrink-0 text-sm"
+                      title="Preview file from MinIO"
+                    >
+                      <ExternalLink size={14} />
+                      Preview
+                    </button>
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        deleteFile(f.filename);
+                      }}
+                      className="flex items-center gap-1 px-3 py-2 bg-red-50 hover:bg-red-100 text-red-600 rounded-lg transition-colors flex-shrink-0 text-sm"
+                    >
+                      <Trash2 size={14} />
+                      Delete
+                    </button>
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    </>
+  );
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-50 to-slate-100">
@@ -585,308 +895,14 @@ export default function App() {
         </div>
       )}
 
-      <div className="max-w-6xl mx-auto p-6">
-        {/* Header */}
-        <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-6 mb-6">
-          <div className="flex items-center justify-between">
-            <div>
-              <h1 className="text-3xl font-bold text-slate-800 flex items-center gap-3">
-                <Brain className="text-purple-600" size={32} />
-                AI-Powered File Storage Manager
-              </h1>
-              <p className="text-slate-600 mt-1">
-                MinIO & AWS S3 Integration • AI-Powered Analysis • Instant Preview & Download
-              </p>
-            </div>
-            <button
-              onClick={fetchFiles}
-              disabled={loading}
-              className="flex items-center gap-2 px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg transition-colors disabled:opacity-50"
-            >
-              <RefreshCw size={18} className={loading ? "animate-spin" : ""} />
-              Refresh
-            </button>
-          </div>
-        </div>
-
-        {/* Upload Section */}
-        <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-6 mb-6">
-          <h2 className="text-xl font-semibold text-slate-800 mb-4 flex items-center gap-2">
-            <Upload size={22} />
-            Upload File
-          </h2>
-          
-          <div
-            onDragEnter={handleDrag}
-            onDragLeave={handleDrag}
-            onDragOver={handleDrag}
-            onDrop={handleDrop}
-            className={`border-2 border-dashed rounded-lg p-8 text-center transition-all ${
-              dragActive 
-                ? "border-blue-500 bg-blue-50" 
-                : "border-slate-300 bg-slate-50"
-            }`}
-          >
-            <input
-              type="file"
-              id="fileInput"
-              onChange={(e) => setFile(e.target.files[0])}
-              className="hidden"
-            />
-            <label htmlFor="fileInput" className="cursor-pointer">
-              <File className="mx-auto mb-3 text-slate-400" size={48} />
-              <p className="text-slate-600 mb-2">
-                {file ? (
-                  <span className="font-semibold text-blue-600">{file.name}</span>
-                ) : (
-                  <>
-                    Drag & drop your file here or <span className="text-blue-600">click to browse</span>
-                  </>
-                )}
-              </p>
-              <p className="text-sm text-slate-400">
-                Supports AI analysis for PDFs, images, and text files
-              </p>
-            </label>
-          </div>
-
-          {file && (
-            <div className="mt-4 p-4 bg-blue-50 rounded-lg border border-blue-200">
-              <div className="flex items-center gap-3">
-                {getFileIcon(file.name)}
-                <div className="flex-1">
-                  <p className="font-medium text-slate-800">{file.name}</p>
-                  <p className="text-sm text-slate-600">
-                    Size: {formatFileSize(file.size)}
-                    {isFileTypeSupportedForAI(file.name) && (
-                      <span className="ml-2 text-purple-600 flex items-center gap-1">
-                        <Brain size={12} />
-                        AI Analysis Available
-                      </span>
-                    )}
-                  </p>
-                </div>
-                <button
-                  onClick={() => setFile(null)}
-                  className="p-1 hover:bg-blue-100 rounded transition-colors"
-                >
-                  <X size={16} className="text-slate-600" />
-                </button>
-              </div>
-            </div>
-          )}
-
-          {uploadProgress > 0 && (
-            <div className="mt-4">
-              <div className="flex justify-between text-sm text-slate-600 mb-2">
-                <span>Uploading...</span>
-                <span>{uploadProgress}%</span>
-              </div>
-              <div className="w-full bg-slate-200 rounded-full h-2 overflow-hidden">
-                <div
-                  className="bg-gradient-to-r from-blue-500 to-blue-600 h-full transition-all duration-300"
-                  style={{ width: `${uploadProgress}%` }}
-                ></div>
-              </div>
-            </div>
-          )}
-
-          <button
-            onClick={uploadFile}
-            disabled={!file || uploadProgress > 0}
-            className="mt-4 w-full flex items-center justify-center gap-2 px-6 py-3 bg-gradient-to-r from-blue-600 to-blue-700 hover:from-blue-700 hover:to-blue-800 text-white rounded-lg transition-all disabled:opacity-50 disabled:cursor-not-allowed font-medium"
-          >
-            <Upload size={20} />
-            {uploadProgress > 0 ? 'Uploading...' : 'Upload File'}
-          </button>
-        </div>
-
-        {/* Search and Filter */}
-        <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-4 mb-6">
-          <div className="flex flex-col sm:flex-row gap-4">
-            <div className="flex-1 relative">
-              <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-slate-400" size={18} />
-              <input
-                type="text"
-                placeholder="Search files by name or keywords..."
-                value={searchTerm}
-                onChange={(e) => setSearchTerm(e.target.value)}
-                className="w-full pl-10 pr-4 py-2 border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-              />
-            </div>
-            <div className="flex items-center gap-2">
-              <Filter size={18} className="text-slate-400" />
-              <select
-                value={filterStatus}
-                onChange={(e) => setFilterStatus(e.target.value)}
-                className="px-4 py-2 border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent bg-white"
-              >
-                <option value="all">All Files</option>
-                <option value="s3">AWS S3 Only</option>
-                <option value="minio">MinIO Only</option>
-                <option value="ai">AI Analyzed</option>
-              </select>
-            </div>
-          </div>
-        </div>
-
-        {/* Files List */}
-        <div className="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden">
-          <div className="p-4 border-b border-slate-200 bg-slate-50 flex items-center justify-between">
-            <h2 className="text-lg font-semibold text-slate-800">
-              Files ({filteredFiles.length})
-            </h2>
-            <div className="flex items-center gap-4 text-sm text-slate-600">
-              <div className="flex items-center gap-2">
-                <div className="flex items-center gap-1">
-                  <div className="w-2 h-2 bg-orange-500 rounded-full"></div>
-                  <span>MinIO Only</span>
-                </div>
-                <div className="flex items-center gap-1">
-                  <div className="w-2 h-2 bg-green-500 rounded-full"></div>
-                  <span>S3 Synced</span>
-                </div>
-              </div>
-              <div className="flex items-center gap-1 text-purple-600">
-                <Brain size={16} />
-                <span>AI Analyzed</span>
-              </div>
-            </div>
-          </div>
-          
-          {loading ? (
-            <div className="p-12 text-center">
-              <RefreshCw className="animate-spin mx-auto mb-3 text-blue-600" size={32} />
-              <p className="text-slate-600">Loading files...</p>
-            </div>
-          ) : filteredFiles.length === 0 ? (
-            <div className="p-12 text-center">
-              <File className="mx-auto mb-3 text-slate-300" size={48} />
-              <p className="text-slate-600">No files found.</p>
-              <p className="text-sm text-slate-400 mt-1">
-                {searchTerm || filterStatus !== "all" 
-                  ? "Try adjusting your search or filter" 
-                  : "Upload your first file to get started"
-                }
-              </p>
-            </div>
-          ) : (
-            <div className="divide-y divide-slate-200">
-              {filteredFiles.map((f) => (
-                <div
-                  key={f.filename}
-                  onClick={() => setSelectedFile(f)}
-                  className="p-4 hover:bg-slate-50 transition-colors cursor-pointer group"
-                >
-                  <div className="flex items-start justify-between gap-4">
-                    <div className="flex-1 min-w-0">
-                      <div className="flex items-center gap-3 mb-2">
-                        {getFileIcon(f.filename)}
-                        <div className="flex-1 min-w-0">
-                          <div className="flex items-center gap-2">
-                            <h3 className="font-semibold text-slate-800 truncate group-hover:text-blue-600 transition-colors">
-                              {f.filename}
-                            </h3>
-                            {f.ai_analysis && (
-                              <Brain size={14} className="text-purple-500 flex-shrink-0" title="AI Analyzed" />
-                            )}
-                          </div>
-                        </div>
-                      </div>
-                      
-                      <div className="flex flex-wrap items-center gap-3 text-sm">
-                        {f.status === "uploaded-to-s3" ? (
-                          <span className="flex items-center gap-1 text-green-600 bg-green-50 px-2 py-1 rounded-full text-xs font-medium">
-                            <CheckCircle size={14} />
-                            Synced to S3
-                          </span>
-                        ) : (
-                          <span className="flex items-center gap-1 text-orange-600 bg-orange-50 px-2 py-1 rounded-full text-xs font-medium">
-                            <Clock size={14} />
-                            MinIO Only
-                          </span>
-                        )}
-                        {f.size && (
-                          <span className="text-slate-500">{formatFileSize(f.size)}</span>
-                        )}
-                        {f.minio_uploaded_at && (
-                          <span className="text-slate-400 text-xs">
-                            Uploaded: {formatDate(f.minio_uploaded_at)}
-                          </span>
-                        )}
-                      </div>
-
-                      {/* AI Analysis Preview */}
-                      {f.ai_analysis && (
-                        <div className="mt-2 flex flex-wrap items-center gap-2">
-                          {f.ai_analysis.keywords && f.ai_analysis.keywords.slice(0, 3).map((keyword, index) => (
-                            <span 
-                              key={index}
-                              className="bg-purple-100 text-purple-700 px-2 py-1 rounded text-xs"
-                            >
-                              {keyword}
-                            </span>
-                          ))}
-                          {f.ai_analysis.keywords && f.ai_analysis.keywords.length > 3 && (
-                            <span className="text-purple-600 text-xs">
-                              +{f.ai_analysis.keywords.length - 3} more
-                            </span>
-                          )}
-                        </div>
-                      )}
-                      
-                      <p className="text-xs text-slate-400 mt-2 flex items-center gap-1">
-                        <Link2 size={12} />
-                        {f.ai_analysis 
-                          ? "Click to view AI insights & file options" 
-                          : "Click to view file details and options"
-                        }
-                      </p>
-                    </div>
-                    
-                    <div className="flex items-center gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
-                      {isFileTypeSupportedForAI(f.filename) && !f.ai_analysis && (
-                        <button
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            analyzeFile(f.filename);
-                          }}
-                          disabled={analyzingFiles[f.filename]}
-                          className="flex items-center gap-1 px-3 py-2 bg-purple-50 hover:bg-purple-100 text-purple-600 rounded-lg transition-colors flex-shrink-0 text-sm"
-                          title="Analyze with AI"
-                        >
-                          <Zap size={14} className={analyzingFiles[f.filename] ? "animate-spin" : ""} />
-                          {analyzingFiles[f.filename] ? "..." : "AI"}
-                        </button>
-                      )}
-                      <button
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          previewFile(f.filename, 'minio');
-                        }}
-                        className="flex items-center gap-1 px-3 py-2 bg-blue-50 hover:bg-blue-100 text-blue-600 rounded-lg transition-colors flex-shrink-0 text-sm"
-                        title="Preview file from MinIO"
-                      >
-                        <ExternalLink size={14} />
-                        Preview
-                      </button>
-                      <button
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          deleteFile(f.filename);
-                        }}
-                        className="flex items-center gap-1 px-3 py-2 bg-red-50 hover:bg-red-100 text-red-600 rounded-lg transition-colors flex-shrink-0 text-sm"
-                      >
-                        <Trash2 size={14} />
-                        Delete
-                      </button>
-                    </div>
-                  </div>
-                </div>
-              ))}
-            </div>
-          )}
-        </div>
+      <div className="max-w-7xl mx-auto p-6">
+        <Navigation />
+        
+        {currentView === "files" ? (
+          <FileManagerView />
+        ) : (
+          <Dashboard BASE_URL={BASE_URL} />
+        )}
 
         {/* Footer */}
         <div className="mt-8 text-center text-slate-500 text-sm">
