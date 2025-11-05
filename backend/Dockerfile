@@ -4,37 +4,34 @@
 FROM python:3.11-slim
 
 # ======================================================
-# 📦 System Dependencies
+# 📦 Install System Dependencies
 # ======================================================
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
-        build-essential \
         libmagic1 \
         tesseract-ocr \
         tesseract-ocr-eng \
         poppler-utils \
         ffmpeg \
-        curl \
         tini \
         ca-certificates && \
     apt-get clean && rm -rf /var/lib/apt/lists/*
 
 # ======================================================
-# 🏗️ Environment Setup
+# ⚙️ Setup Environment
 # ======================================================
 WORKDIR /app
 ENV PYTHONUNBUFFERED=1
 ENV PIP_NO_CACHE_DIR=1
 
 # ======================================================
-# 🔧 Copy Dependencies
+# 📦 Install Python Dependencies
 # ======================================================
-COPY backend/requirements.txt /app/requirements.txt
-
+COPY requirements.txt /app/requirements.txt
 RUN pip install --upgrade pip && pip install -r requirements.txt
 
 # ======================================================
-# 📁 Copy Source Code
+# 📁 Copy Application Code
 # ======================================================
 COPY . /app
 
