@@ -1,21 +1,23 @@
 # syntax=docker/dockerfile:1
 FROM python:3.11-slim
 
+# Set working directory
 WORKDIR /app
-COPY . .
 
-# Install dependencies
-RUN apt-get update && apt-get install -y clamav clamav-daemon && \
-    pip install --no-cache-dir -r requirements.txt
+# Install system dependencies (if ClamAV client needed)
+RUN apt-get update && apt-get install -y libmagic1 && apt-get clean
 
-# Update virus database
-RUN freshclam
+# Copy requirements
+COPY backend/requirements.txt .
 
-# Copy ClamAV config if needed (optional)
-# COPY config/clamd.conf /etc/clamav/clamd.conf
+RUN pip install --no-cache-dir -r requirements.txt
 
-# Expose Flask and ClamD ports
-EXPOSE 5000 3310
+# Copy project
+COPY backend /app/backend
+COPY app.py config.py /app/
 
-# Start both ClamD and Flask app
-CMD service clamav-daemon start && python app.py
+# Expose app port
+EXPOSE 8000
+
+# Start backend
+CMD ["python", "app.py"]

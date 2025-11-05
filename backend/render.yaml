@@ -1,33 +1,31 @@
 services:
   - type: web
-    name: ai-file-analysis
+    name: hybridstorage-backend
     env: docker
+    dockerfilePath: ./Dockerfile
     plan: free
-    autoDeploy: true
-
     envVars:
-      - key: FLASK_ENV
-        value: production
-
+      - key: MONGO_URI
+        sync: false
+      - key: MONGO_DB
+        value: hybridstorage
       - key: MINIO_ENDPOINT
-        value: https://minio.yourdomain.com
+        sync: false
       - key: MINIO_ACCESS_KEY
         sync: false
       - key: MINIO_SECRET_KEY
         sync: false
-
-      - key: AWS_ACCESS_KEY
+      - key: CLAMAV_HOST
+        value: clamav
+      - key: CLAMAV_PORT
+        value: "3310"
+      - key: AWS_S3_BUCKET
         sync: false
-      - key: AWS_SECRET_KEY
+      - key: AWS_ACCESS_KEY_ID
         sync: false
-      - key: AWS_BUCKET
-        value: your-bucket-name
-
-      - key: MONGO_URI
+      - key: AWS_SECRET_ACCESS_KEY
         sync: false
-      - key: OPENAI_API_KEY
-        sync: false
+      - key: AWS_REGION
+        value: ap-south-1
       - key: GROQ_API_KEY
         sync: false
-
-    healthCheckPath: /health
