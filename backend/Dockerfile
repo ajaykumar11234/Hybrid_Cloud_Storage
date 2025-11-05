@@ -1,22 +1,17 @@
-# syntax=docker/dockerfile:1
 FROM python:3.11-slim
 
 WORKDIR /app
 
-# Optional: install ClamAV client library dependencies
 RUN apt-get update && apt-get install -y libmagic1 && apt-get clean
 
-# Copy requirements
-COPY requirements.txt .
+# 👇 FIX: specify the correct path
+COPY backend/requirements.txt .
 
-# Install dependencies
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copy everything inside backend/
-COPY . .
+# 👇 FIX: copy everything inside backend/
+COPY backend /app
 
-# Expose app port
 EXPOSE 8000
 
-# Start backend
 CMD ["python", "app.py"]
