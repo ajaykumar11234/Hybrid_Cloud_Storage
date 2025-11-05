@@ -1,17 +1,14 @@
 #!/usr/bin/env bash
 set -e
 
-# Update ClamAV DB (may take a few seconds)
-echo "🔄 Updating ClamAV DB..."
-freshclam --quiet || echo "⚠️ freshclam failed (continuing)..."
+echo "=========================================="
+echo "🚀 Starting Flask Backend (Hybrid Storage)"
+echo "=========================================="
 
-# Start clamd (clamd daemon) in background
-echo "🔄 Starting clamd..."
-/usr/sbin/clamd &
+echo "Environment:"
+echo "  🌍 PORT=${PORT:-8000}"
+echo "  🧠 FLASK_ENV=${FLASK_ENV:-production}"
+echo "------------------------------------------"
 
-# Wait a couple seconds for clamd to become available
-sleep 2
-
-# Start Gunicorn (4 workers)
-echo "🚀 Starting Gunicorn..."
-exec gunicorn -w 4 -b 0.0.0.0:8000 app:app
+# Start Gunicorn (production WSGI server)
+exec gunicorn -w 4 -b 0.0.0.0:${PORT:-8000} app:app

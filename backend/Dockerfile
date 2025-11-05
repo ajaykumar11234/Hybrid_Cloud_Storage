@@ -1,34 +1,42 @@
-# backend/Dockerfile
-FROM python:3.11-bullseye
+# ======================================================
+# 🧠 Base Image
+# ======================================================
+FROM python:3.11-slim
 
-WORKDIR /app
-
-# Install system packages (ClamAV, libmagic, openssl, gettext for tesseract if needed)
+# ======================================================
+# 📦 Install Only Essential System Dependencies
+# ======================================================
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
-      libmagic1 \
-      ca-certificates \
-      openssl \
-      clamav \
-      clamav-daemon \
-      clamdscan \
-      tesseract-ocr \
-      tesseract-ocr-eng \
-      && update-ca-certificates && \
+        libmagic1 \
+        tesseract-ocr \
+        tesseract-ocr-eng \
+        poppler-utils \
+        ffmpeg \
+        tini \
+        ca-certificates && \
     apt-get clean && rm -rf /var/lib/apt/lists/*
 
-# Copy requirements and install python deps
-COPY backend/requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+# ======================================================
+# ⚙️ Setup Workdir and Environment
+# ======================================================
+WORKDIR /app
+ENV PYTHONUNBUFFERED=1
+ENV PIP_NO_CACHE_DIR=1
 
-# Copy app source
-COPY backend /app
+# ======================================================
+# 📦 Install Python Dependencies
+# ======================================================
+COPY requirements.txt .
+RUN pip install --upgrade pip && pip install -r requirements.txt
 
-# Add entrypoint
-COPY backend/entrypoint.sh /entrypoint.sh
-RUN chmod +x /entrypoint.sh
+# ======================================================
+# 🧩 Copy Project Files
+# ======================================================
+COPY . .
 
-EXPOSE 8000
-
-# Entrypoint will start freshclam, clamd, then gunicorn
-CMD ["/entrypoint.sh"]
+# ======================================================
+# 🚀 Entrypoint
+# ======================================================
+RUN chmod +x /app/entrypoint.sh
+ENTRYPOINT ["/usr/bin/tini", "--", "/app/entrypoint.sh"]
