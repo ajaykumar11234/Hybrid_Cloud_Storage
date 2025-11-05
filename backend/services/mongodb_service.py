@@ -1,45 +1,71 @@
-from pymongo import MongoClient, DESCENDING
-from pymongo.errors import PyMongoError, DuplicateKeyError
-from config import Config
-from models.file_model import FileMetadata
 import logging
 from datetime import datetime
 from typing import List, Dict, Optional
 
+from pymongo import MongoClient, DESCENDING
+from pymongo.errors import PyMongoError, DuplicateKeyError
+import certifi  # ✅ For trusted SSL certificates
+from config import Config
+from models.file_model import FileMetadata
+
 logger = logging.getLogger(__name__)
+
 
 class MongoDBService:
     """MongoDB service for user-scoped file metadata operations."""
 
     def __init__(self):
         try:
-            # Initialize MongoDB client
-            self.client = MongoClient(Config.MONGO_URI, serverSelectionTimeoutMS=5000)
+            logger.info("🔄 Initializing MongoDB connection...")
+
+            # ✅ Use certifi for SSL (Render & Docker-safe)
+            self.client = MongoClient(
+                Config.MONGO_URI,
+                serverSelectionTimeoutMS=5000,
+                tlsCAFile=certifi.where()
+            )
+
+            # Select database and collection
             self.db = self.client[Config.DB_NAME]
             self.files = self.db[Config.COLLECTION_NAME]
 
-            # Verify connection
+            # ✅ Verify connection
             self.client.admin.command("ping")
             logger.info("✅ MongoDB connected successfully")
 
-            # Check existing indexes
+            # Create necessary indexes if not exist
+            self._ensure_indexes()
+
+        except PyMongoError as e:
+            logger.error(f"❌ MongoDB initialization error: {e}", exc_info=True)
+            raise
+
+    # ------------------------------------------------------------
+    # INDEX SETUP
+    # ------------------------------------------------------------
+    def _ensure_indexes(self):
+        """Ensure required indexes exist on the collection."""
+        try:
             existing_indexes = self.files.index_information()
 
-            # Regular indexes
-            if "filename_1" not in existing_indexes:
-                self.files.create_index([("filename", 1)], unique=False)
-            if "user_id_1" not in existing_indexes:
-                self.files.create_index([("user_id", 1)])
-            if "minio_uploaded_at_-1" not in existing_indexes:
-                self.files.create_index([("minio_uploaded_at", DESCENDING)])
-            if "ai_analysis_status_1" not in existing_indexes:
-                self.files.create_index([("ai_analysis_status", 1)])
+            def create_index_safe(fields, **kwargs):
+                name = kwargs.pop("name", "_".join(f"{f[0]}_{f[1]}" for f in fields))
+                if name not in existing_indexes:
+                    self.files.create_index(fields, name=name, **kwargs)
+                    logger.info(f"🆕 Created index: {name}")
+                else:
+                    logger.debug(f"ℹ️ Index already exists: {name}")
 
-            # ✅ Safe text index check (prevent duplicate conflicts)
+            # Regular indexes
+            create_index_safe([("filename", 1)])
+            create_index_safe([("user_id", 1)])
+            create_index_safe([("minio_uploaded_at", DESCENDING)])
+            create_index_safe([("ai_analysis_status", 1)])
+
+            # Text index for search
             text_index_exists = any(
-                any(key_pair[0] == "_fts" and key_pair[1] == "text"
-                    for key_pair in idx_info.get("key", []))
-                for idx_info in existing_indexes.values()
+                idx.get("key", {}).get("_fts") == "text"
+                for idx in existing_indexes.values()
             )
 
             if not text_index_exists:
@@ -52,14 +78,14 @@ class MongoDBService:
                     name="text_search_index",
                     default_language="english",
                 )
-                logger.info("🆕 Created new text index for filename + AI summary + keywords")
+                logger.info("🆕 Created text index for search")
             else:
-                logger.info("ℹ️ Existing text index detected — skipping creation")
+                logger.debug("ℹ️ Text index already exists")
 
             logger.info("✅ MongoDB indexes ready")
 
         except PyMongoError as e:
-            logger.error(f"❌ MongoDB initialization error: {e}", exc_info=True)
+            logger.error(f"❌ Error ensuring indexes: {e}", exc_info=True)
             raise
 
     # ------------------------------------------------------------
@@ -215,3 +241,4 @@ class MongoDBService:
 # ------------------------------------------------------------
 logger.info("🔄 Creating global MongoDB service instance...")
 mongodb_service = MongoDBService()
+    

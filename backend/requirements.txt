@@ -11,3 +11,6 @@ openai==0.28.1
 python-dotenv==1.0.0
 clamd
 PyJWT==2.9.0
+pymongo
+certifi
+
