@@ -2,23 +2,15 @@ services:
   - type: web
     name: hybridstorage-backend
     env: docker
-    dockerfilePath: ./Dockerfile
+    dockerfilePath: ./backend/Dockerfile
+    buildCommand: ""
+    startCommand: ""
     plan: free
     envVars:
       - key: MONGO_URI
         sync: false
       - key: MONGO_DB
         value: hybridstorage
-      - key: MINIO_ENDPOINT
-        sync: false
-      - key: MINIO_ACCESS_KEY
-        sync: false
-      - key: MINIO_SECRET_KEY
-        sync: false
-      - key: CLAMAV_HOST
-        value: clamav
-      - key: CLAMAV_PORT
-        value: "3310"
       - key: AWS_S3_BUCKET
         sync: false
       - key: AWS_ACCESS_KEY_ID
@@ -28,4 +20,10 @@ services:
       - key: AWS_REGION
         value: ap-south-1
       - key: GROQ_API_KEY
+        sync: false
+      - key: MINIO_ENDPOINT
+        sync: false
+      - key: MINIO_ACCESS_KEY
+        sync: false
+      - key: MINIO_SECRET_KEY
         sync: false
