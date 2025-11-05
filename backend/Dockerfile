@@ -1,8 +1,7 @@
-FROM python:3.11-slim
+FROM python:3.11-bullseye
 
 WORKDIR /app
 
-# 🧰 Install CA certificates + OpenSSL + libmagic
 RUN apt-get update && \
     apt-get install -y libmagic1 ca-certificates openssl && \
     update-ca-certificates && \
@@ -14,4 +13,5 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY backend /app
 
 EXPOSE 8000
+
 CMD ["python", "app.py"]

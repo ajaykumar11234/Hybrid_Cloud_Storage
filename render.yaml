@@ -2,13 +2,18 @@ services:
   - type: web
     name: hybridstorage-backend
     env: docker
-    dockerfilePath: ./backend/Dockerfile   # path to your Dockerfile
+    dockerfilePath: ./backend/Dockerfile   # ✅ your Dockerfile path
     plan: free
+    autoDeploy: true
+    healthCheckPath: /health               # ✅ allows Render to verify app is running
     envVars:
+      # Database
       - key: MONGO_URI
-        sync: false
+        sync: false                        # set manually in Render dashboard
       - key: MONGO_DB
         value: hybridstorage
+
+      # AWS / S3
       - key: AWS_S3_BUCKET
         sync: false
       - key: AWS_ACCESS_KEY_ID
@@ -17,11 +22,19 @@ services:
         sync: false
       - key: AWS_REGION
         value: ap-south-1
+
+      # AI / Groq
       - key: GROQ_API_KEY
         sync: false
+
+      # MinIO
       - key: MINIO_ENDPOINT
         sync: false
       - key: MINIO_ACCESS_KEY
         sync: false
       - key: MINIO_SECRET_KEY
         sync: false
+
+      # Flask runtime
+      - key: PORT
+        value: 8000                        # default port (Flask reads this)
