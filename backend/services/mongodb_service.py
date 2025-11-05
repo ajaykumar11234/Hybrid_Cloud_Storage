@@ -2,16 +2,12 @@ import logging
 from datetime import datetime
 from typing import List, Dict, Optional
 import certifi
-
-# ✅ Import MongoClient & PyMongo errors
 from pymongo import MongoClient, DESCENDING
 from pymongo.errors import PyMongoError, DuplicateKeyError
-
 from config import Config
 from models.file_model import FileMetadata
 
 logger = logging.getLogger(__name__)
-
 
 class MongoDBService:
     """MongoDB service for user-scoped file metadata operations."""
@@ -20,19 +16,19 @@ class MongoDBService:
         try:
             logger.info("🔄 [MongoDB] Initializing secure TLS connection...")
 
-            # ✅ Use modern TLS options (no ssl_cert_reqs)
+            # ✅ Secure, modern TLS-based MongoDB Atlas connection
             self.client = MongoClient(
                 Config.MONGO_URI,
                 tls=True,
                 tlsCAFile=certifi.where(),
-                serverSelectionTimeoutMS=8000
+                serverSelectionTimeoutMS=20000  # Increased timeout (20s)
             )
 
             # ✅ Verify connection
             self.client.admin.command("ping")
             logger.info("✅ [MongoDB] Connected successfully")
 
-            # Select database and collection
+            # Select DB and collection
             self.db = self.client[Config.DB_NAME]
             self.files = self.db[Config.COLLECTION_NAME]
 
@@ -40,13 +36,20 @@ class MongoDBService:
 
         except PyMongoError as e:
             logger.error(f"❌ [MongoDB] Connection or setup failed: {e}", exc_info=True)
-            raise
+            # Allow app to still start even if Mongo fails temporarily
+            self.client = None
+            self.db = None
+            self.files = None
 
     # ------------------------------------------------------------
     # INDEX SETUP
     # ------------------------------------------------------------
     def _ensure_indexes(self):
         """Ensure required indexes exist on the collection."""
+        if not self.files:
+            logger.warning("⚠️ [MongoDB] Skipping index setup — collection unavailable.")
+            return
+
         try:
             existing_indexes = self.files.index_information()
 
@@ -87,13 +90,16 @@ class MongoDBService:
 
         except PyMongoError as e:
             logger.error(f"❌ [MongoDB] Index creation failed: {e}", exc_info=True)
-            raise
 
     # ------------------------------------------------------------
     # CRUD OPERATIONS
     # ------------------------------------------------------------
     def insert_file(self, file_meta: FileMetadata) -> str:
         """Insert new file metadata document."""
+        if not self.files:
+            logger.error("❌ [MongoDB] Insert failed — connection unavailable.")
+            return ""
+
         try:
             file_dict = file_meta.to_dict()
             file_dict.setdefault("minio_uploaded_at", datetime.utcnow().isoformat())
@@ -112,6 +118,10 @@ class MongoDBService:
 
     def get_all_files(self, user_id: Optional[str] = None) -> List[Dict]:
         """Fetch all files for a specific user."""
+        if not self.files:
+            logger.warning("⚠️ [MongoDB] get_all_files() skipped — no DB connection.")
+            return []
+
         try:
             query = {"user_id": user_id} if user_id else {}
             cursor = self.files.find(query).sort("minio_uploaded_at", DESCENDING)
@@ -122,6 +132,10 @@ class MongoDBService:
 
     def get_file(self, filename: str, user_id: Optional[str] = None) -> Optional[Dict]:
         """Fetch single file metadata."""
+        if not self.files:
+            logger.warning("⚠️ [MongoDB] get_file() skipped — no DB connection.")
+            return None
+
         try:
             query = {"filename": filename}
             if user_id:
@@ -133,7 +147,11 @@ class MongoDBService:
             return None
 
     def delete_file(self, filename: str, user_id: Optional[str] = None) -> bool:
-        """Delete a file metadata document (user-scoped)."""
+        """Delete a file metadata document."""
+        if not self.files:
+            logger.warning("⚠️ [MongoDB] delete_file() skipped — no DB connection.")
+            return False
+
         try:
             query = {"filename": filename}
             if user_id:
@@ -150,6 +168,10 @@ class MongoDBService:
 
     def update_file(self, filename: str, updates: dict, user_id: Optional[str] = None) -> bool:
         """Update file metadata."""
+        if not self.files:
+            logger.warning("⚠️ [MongoDB] update_file() skipped — no DB connection.")
+            return False
+
         try:
             updates["last_updated"] = datetime.utcnow().isoformat()
             query = {"filename": filename}
@@ -164,6 +186,10 @@ class MongoDBService:
 
     def search_files(self, query_text: str, user_id: Optional[str] = None) -> List[Dict]:
         """Search user's files by filename, summary, caption, or keywords."""
+        if not self.files:
+            logger.warning("⚠️ [MongoDB] search_files() skipped — no DB connection.")
+            return []
+
         try:
             if not query_text:
                 return self.get_all_files(user_id)
@@ -182,6 +208,9 @@ class MongoDBService:
             logger.error(f"❌ Search error: {e}", exc_info=True)
             return []
 
+    # ------------------------------------------------------------
+    # HELPER FUNCTIONS
+    # ------------------------------------------------------------
     def _normalize(self, doc: Optional[Dict]) -> Dict:
         """Normalize MongoDB document for API-safe response."""
         if not doc:
@@ -198,4 +227,12 @@ class MongoDBService:
 # GLOBAL INSTANCE
 # ------------------------------------------------------------
 logger.info("🔄 Creating global MongoDB service instance...")
-mongodb_service = MongoDBService()
+try:
+    mongodb_service = MongoDBService()
+    if mongodb_service.client:
+        logger.info("✅ [MongoDB] Global instance initialized successfully.")
+    else:
+        logger.warning("⚠️ [MongoDB] Instance created but connection unavailable.")
+except Exception as e:
+    logger.error(f"❌ [MongoDB] Failed to create global instance: {e}", exc_info=True)
+    mongodb_service = None

@@ -3,30 +3,30 @@ flask==2.3.3
 flask-cors==4.0.0
 
 # ☁️ Cloud Services & Storage
-boto3==1.28.62           # AWS S3 SDK
-minio==7.1.16            # MinIO client
+boto3==1.28.62
+minio==7.1.16
 
 # 🧩 Database
-pymongo==4.5.0           # MongoDB client
-dnspython==2.4.2         # Required for MongoDB Atlas SRV URIs
-certifi==2024.8.30       # Root CA bundle for TLS
+pymongo==4.5.0
+dnspython==2.4.2
+certifi==2024.8.30
 
 # 🧰 File & Media Processing
-Pillow==10.0.1           # Image processing
-pytesseract==0.3.10      # OCR
-PyPDF2==3.0.1            # PDF parsing
+Pillow==10.0.1
+pytesseract==0.3.10
+PyPDF2==3.0.1
 
 # 🦠 Security / Scanning
-clamd==1.0.2             # ClamAV virus scanning
+clamd==1.0.2
 
 # 🤖 AI / NLP
-groq==0.3.0              # Groq AI API
-openai==0.28.1           # OpenAI API
+groq==0.3.0
+openai==0.28.1
 
 # 🔐 Auth & Config
-PyJWT==2.9.0             # JSON Web Tokens
-python-dotenv==1.0.0     # .env support
+PyJWT==2.9.0
+python-dotenv==1.0.0
 
 # 🌐 Utilities
-requests==2.31.0         # HTTP requests
-gunicorn==21.2.0         # Production-grade WSGI server (for Render)
+requests==2.31.0
+gunicorn==21.2.0
