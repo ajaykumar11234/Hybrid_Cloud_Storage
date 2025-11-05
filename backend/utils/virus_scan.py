@@ -1,23 +1,27 @@
 import clamd
-import io
-import logging
+import os
 
-logger = logging.getLogger(__name__)
+class VirusScanner:
+    def __init__(self, host="localhost", port=3310):
+        try:
+            self.cd = clamd.ClamdNetworkSocket(host=host, port=port)
+            self.cd.ping()  # test connection
+        except Exception as e:
+            print("⚠️ Could not connect to ClamD:", e)
+            self.cd = None
 
-def scan_file(file_bytes: bytes):
-    """Scan file bytes using ClamAV and return (is_clean, virus_name)"""
-    try:
-        cd = clamd.ClamdNetworkSocket(host='localhost', port=3310)
-        result = cd.instream(io.BytesIO(file_bytes))
-        status, virus_name = result['stream']
+    def scan_file(self, file_path):
+        """Returns True if file is clean, False if infected."""
+        if not self.cd:
+            raise Exception("ClamD is not running or not reachable.")
 
-        if status == 'FOUND':
-            logger.warning(f"🚨 Virus detected: {virus_name}")
-            return False, virus_name
-        logger.info("✅ File is clean")
-        return True, None
+        if not os.path.exists(file_path):
+            raise FileNotFoundError(file_path)
 
-    except Exception as e:
-        logger.error(f"❌ ClamAV scan error: {e}", exc_info=True)
-        # Fail-safe: if scanner fails, block upload
-        return False, "ScanError"
+        result = self.cd.scan(file_path)
+        if not result:
+            return True
+
+        # Result example: {'/path/file.pdf': ('FOUND', 'Eicar-Test-Signature')}
+        status = list(result.values())[0][0]
+        return status == 'OK'
