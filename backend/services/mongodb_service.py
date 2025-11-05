@@ -1,44 +1,35 @@
-import logging
-from datetime import datetime
-from typing import List, Dict, Optional
-
-from pymongo import MongoClient, DESCENDING
-from pymongo.errors import PyMongoError, DuplicateKeyError
-import certifi  # ✅ For trusted SSL certificates
+from pymongo import MongoClient
+import certifi, ssl
 from config import Config
-from models.file_model import FileMetadata
+import logging
 
 logger = logging.getLogger(__name__)
 
-
 class MongoDBService:
-    """MongoDB service for user-scoped file metadata operations."""
-
     def __init__(self):
         try:
-            logger.info("🔄 Initializing MongoDB connection...")
+            logger.info("🔄 Connecting to MongoDB...")
 
-            # ✅ Use certifi for SSL (Render & Docker-safe)
+            # ✅ Force TLS 1.2 and use trusted CA from certifi
             self.client = MongoClient(
                 Config.MONGO_URI,
-                serverSelectionTimeoutMS=5000,
-                tlsCAFile=certifi.where()
+                tls=True,
+                tlsAllowInvalidCertificates=False,
+                tlsCAFile=certifi.where(),
+                ssl_cert_reqs=ssl.CERT_REQUIRED,
+                serverSelectionTimeoutMS=8000,
             )
 
-            # Select database and collection
-            self.db = self.client[Config.DB_NAME]
-            self.files = self.db[Config.COLLECTION_NAME]
-
-            # ✅ Verify connection
             self.client.admin.command("ping")
             logger.info("✅ MongoDB connected successfully")
 
-            # Create necessary indexes if not exist
-            self._ensure_indexes()
+            self.db = self.client[Config.DB_NAME]
+            self.files = self.db[Config.COLLECTION_NAME]
 
-        except PyMongoError as e:
-            logger.error(f"❌ MongoDB initialization error: {e}", exc_info=True)
+        except Exception as e:
+            logger.error(f"❌ MongoDB connection failed: {e}", exc_info=True)
             raise
+
 
     # ------------------------------------------------------------
     # INDEX SETUP
@@ -241,4 +232,3 @@ class MongoDBService:
 # ------------------------------------------------------------
 logger.info("🔄 Creating global MongoDB service instance...")
 mongodb_service = MongoDBService()
-    
