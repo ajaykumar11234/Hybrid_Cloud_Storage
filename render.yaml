@@ -2,7 +2,7 @@ services:
   - type: web
     name: hybridstorage-backend
     env: docker
-    dockerfilePath: ./backend/Dockerfile   # 👈 points to backend folder
+    dockerfilePath: ./backend/Dockerfile   # path to your Dockerfile
     plan: free
     envVars:
       - key: MONGO_URI
