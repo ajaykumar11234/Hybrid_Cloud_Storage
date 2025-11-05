@@ -3,93 +3,234 @@ from minio.error import S3Error
 from config import Config
 from utils.helpers import get_content_type
 import io
+import logging
 from datetime import timedelta
+from typing import Optional, Tuple, List
+
+logger = logging.getLogger(__name__)
 
 class MinioService:
-    """MinIO service for file operations"""
-    
+    """Handles file operations in MinIO (local object storage)."""
+
     def __init__(self):
-        self.client = Minio(
-            Config.MINIO_ENDPOINT,
-            access_key=Config.MINIO_ACCESS_KEY,
-            secret_key=Config.MINIO_SECRET_KEY,
-            secure=False
-        )
-        self.bucket = Config.MINIO_BUCKET
-        self._ensure_bucket_exists()
-        print("✅ MinIO service initialized")
-    
-    def _ensure_bucket_exists(self):
-        """Ensure the MinIO bucket exists"""
-        found = self.client.bucket_exists(self.bucket)
-        if not found:
-            self.client.make_bucket(self.bucket)
-            print(f"✅ Created MinIO bucket: {self.bucket}")
-    
-    def upload_file(self, filename: str, file_data: bytes, content_type: str = None):
-        """Upload file to MinIO"""
-        if not content_type:
-            content_type = get_content_type(filename)
-        
-        self.client.put_object(
-            self.bucket,
-            filename,
-            data=io.BytesIO(file_data),
-            length=len(file_data),
-            content_type=content_type
-        )
-        print(f"✅ Uploaded {filename} to MinIO")
-    
-    def get_file(self, filename: str) -> bytes:
-        """Get file from MinIO"""
+        self.client = None
+        self.bucket = None
+        logger.info("🔄 Initializing MinIO service...")
+        self._initialize_client()
+
+    # ------------------------------------------------------------
+    # INITIALIZATION
+    # ------------------------------------------------------------
+    def _initialize_client(self):
+        """Initialize MinIO client with error handling."""
         try:
-            response = self.client.get_object(self.bucket, filename)
-            file_data = response.read()
-            response.close()
-            response.release_conn()
-            return file_data
-        except S3Error as e:
-            print(f"❌ Error getting file {filename} from MinIO: {e}")
-            return None
-    
-    def delete_file(self, filename: str) -> bool:
-        """Delete file from MinIO"""
-        try:
-            self.client.remove_object(self.bucket, filename)
-            print(f"✅ Deleted {filename} from MinIO")
-            return True
-        except S3Error as e:
-            print(f"❌ Error deleting file {filename} from MinIO: {e}")
-            return False
-    
-    def generate_presigned_urls(self, filename: str):
-        """Generate presigned URLs for MinIO file"""
-        try:
-            # Preview URL (inline) - FIXED: Use timedelta instead of integer
-            preview_url = self.client.presigned_get_object(
-                self.bucket,
-                filename,
-                expires=timedelta(hours=24),  # Fixed: Use timedelta
-                response_headers={
-                    'response-content-type': get_content_type(filename),
-                    'response-content-disposition': f'inline; filename="{filename}"'
-                }
+            logger.info(f"🔧 MinIO Config - Endpoint: {Config.MINIO_ENDPOINT}, Bucket: {Config.MINIO_BUCKET}")
+
+            if not all([Config.MINIO_ENDPOINT, Config.MINIO_ACCESS_KEY, Config.MINIO_SECRET_KEY]):
+                logger.warning("⚠️ Missing MinIO configuration")
+                return
+
+            # Secure mode (https or not)
+            minio_secure = getattr(Config, "MINIO_SECURE", False)
+
+            self.client = Minio(
+                endpoint=Config.MINIO_ENDPOINT,
+                access_key=Config.MINIO_ACCESS_KEY,
+                secret_key=Config.MINIO_SECRET_KEY,
+                secure=minio_secure
             )
-            
-            # Download URL (attachment) - FIXED: Use timedelta instead of integer
-            download_url = self.client.presigned_get_object(
-                self.bucket,
-                filename,
-                expires=timedelta(hours=24),  # Fixed: Use timedelta
-                response_headers={
-                    'response-content-disposition': f'attachment; filename="{filename}"'
-                }
-            )
-            
-            return preview_url, download_url
+
+            self.bucket = Config.MINIO_BUCKET
+            self._ensure_bucket_exists()
+            logger.info(f"✅ Connected to MinIO bucket: {self.bucket}")
+
         except Exception as e:
-            print(f"❌ Error generating MinIO URLs for {filename}: {e}")
+            logger.error(f"❌ Failed to initialize MinIO client: {e}", exc_info=True)
+            self.client = None
+            self.bucket = None
+
+    def _ensure_bucket_exists(self):
+        """Ensure the configured bucket exists (create if needed)."""
+        try:
+            if not self.client.bucket_exists(self.bucket):
+                self.client.make_bucket(self.bucket)
+                logger.info(f"✅ Created new MinIO bucket: {self.bucket}")
+        except Exception as e:
+            logger.error(f"❌ Error ensuring bucket exists: {e}", exc_info=True)
+            raise
+
+    def is_available(self) -> bool:
+        """Check if MinIO is initialized and bucket exists."""
+        try:
+            return bool(self.client and self.bucket and self.client.bucket_exists(self.bucket))
+        except Exception as e:
+            logger.error(f"❌ MinIO availability check failed: {e}")
+            return False
+
+    # ------------------------------------------------------------
+    # FILE OPERATIONS
+    # ------------------------------------------------------------
+    def upload_file(self, user_id: str, filename: str, file_data, content_type: Optional[str] = None) -> bool:
+        """Upload a file to MinIO under user-specific path."""
+        if not self.is_available():
+            logger.warning("⚠️ MinIO not available — skipping upload")
+            return False
+
+        try:
+            key = f"{user_id}/{filename}"
+            content_type = content_type or get_content_type(filename)
+
+            if isinstance(file_data, str):
+                file_data = file_data.encode("utf-8")
+            elif not isinstance(file_data, (bytes, bytearray)):
+                file_data = bytes(file_data)
+
+            file_bytes = io.BytesIO(file_data)
+            size = len(file_data)
+
+            self.client.put_object(
+                bucket_name=self.bucket,
+                object_name=key,
+                data=file_bytes,
+                length=size,
+                content_type=content_type
+            )
+
+            logger.info(f"✅ Uploaded {key} ({size} bytes)")
+            return True
+
+        except S3Error as e:
+            logger.error(f"❌ S3Error during upload: {e}", exc_info=True)
+        except Exception as e:
+            logger.error(f"❌ Upload failed for {filename}: {e}", exc_info=True)
+        return False
+
+    def get_file(self, user_id: str, filename: str) -> Optional[bytes]:
+        """Retrieve file bytes from MinIO."""
+        if not self.is_available():
+            logger.warning("⚠️ MinIO unavailable during get_file")
+            return None
+
+        key = f"{user_id}/{filename}"
+        response = None
+        try:
+            response = self.client.get_object(self.bucket, key)
+            file_data = response.read()
+            logger.info(f"✅ Retrieved {filename} ({len(file_data)} bytes)")
+            return file_data
+        except Exception as e:
+            logger.error(f"❌ Error fetching {filename}: {e}", exc_info=True)
+            return None
+        finally:
+            if response:
+                try:
+                    response.close()
+                    response.release_conn()
+                except Exception:
+                    pass
+
+    def delete_file(self, user_id: str, filename: str) -> bool:
+        """Delete file from MinIO."""
+        if not self.is_available():
+            return False
+        try:
+            key = f"{user_id}/{filename}"
+            self.client.remove_object(self.bucket, key)
+            logger.info(f"🗑️ Deleted {key} from MinIO")
+            return True
+        except Exception as e:
+            logger.error(f"❌ Delete failed for {filename}: {e}", exc_info=True)
+            return False
+
+    # ------------------------------------------------------------
+    # URL GENERATION
+    # ------------------------------------------------------------
+    def generate_presigned_urls(self, user_id: str, filename: str) -> Tuple[Optional[str], Optional[str]]:
+        """Generate 24h presigned preview and download URLs."""
+        if not self.is_available():
             return None, None
 
-# Create global instance
+        try:
+            key = f"{user_id}/{filename}"
+            content_type = get_content_type(filename)
+            expiry = timedelta(hours=24)
+
+            # ✅ Inline preview (view in browser)
+            preview_url = self.client.presigned_get_object(
+                bucket_name=self.bucket,
+                object_name=key,
+                expires=expiry,
+                response_headers={
+                    "response-content-type": content_type,
+                    "response-content-disposition": f'inline; filename="{filename}"'
+                },
+            )
+
+            # ✅ Attachment download (force download)
+            download_url = self.client.presigned_get_object(
+                bucket_name=self.bucket,
+                object_name=key,
+                expires=expiry,
+                response_headers={
+                    "response-content-disposition": f'attachment; filename="{filename}"'
+                },
+            )
+
+            logger.info(f"✅ Generated presigned URLs for {key}")
+            return preview_url, download_url
+
+        except Exception as e:
+            logger.error(f"❌ Presigned URL generation failed for {filename}: {e}", exc_info=True)
+            return None, None
+
+    # ------------------------------------------------------------
+    # EXTRA UTILITIES
+    # ------------------------------------------------------------
+    def list_user_files(self, user_id: str) -> List[dict]:
+        """List all objects for a given user prefix."""
+        if not self.is_available():
+            return []
+        try:
+            prefix = f"{user_id}/"
+            files = []
+            for obj in self.client.list_objects(self.bucket, prefix=prefix, recursive=True):
+                files.append({
+                    "name": obj.object_name.replace(prefix, ""),
+                    "size": obj.size,
+                    "last_modified": obj.last_modified.isoformat() if obj.last_modified else None,
+                })
+            logger.info(f"✅ Listed {len(files)} files for user {user_id}")
+            return files
+        except Exception as e:
+            logger.error(f"❌ Error listing files for {user_id}: {e}", exc_info=True)
+            return []
+
+    def get_file_info(self, user_id: str, filename: str) -> Optional[dict]:
+        """Return metadata for a specific file."""
+        if not self.is_available():
+            return None
+        try:
+            key = f"{user_id}/{filename}"
+            stat = self.client.stat_object(self.bucket, key)
+            return {
+                "size": stat.size,
+                "content_type": stat.content_type,
+                "last_modified": stat.last_modified.isoformat() if stat.last_modified else None,
+                "etag": stat.etag,
+            }
+        except Exception as e:
+            logger.error(f"❌ Failed to get info for {filename}: {e}", exc_info=True)
+            return None
+
+    def health_check(self) -> bool:
+        """Simple availability check."""
+        try:
+            return self.is_available()
+        except Exception as e:
+            logger.error(f"❌ MinIO health check failed: {e}")
+            return False
+
+
+# Global instance
+logger.info("🔄 Creating global MinIO service instance...")
 minio_service = MinioService()

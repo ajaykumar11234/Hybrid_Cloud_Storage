@@ -1,414 +1,191 @@
 from pymongo import MongoClient, DESCENDING
-from pymongo.collection import Collection
-from pymongo.errors import PyMongoError
+from pymongo.errors import PyMongoError, DuplicateKeyError
 from config import Config
 from models.file_model import FileMetadata
 import logging
-from datetime import datetime, timedelta
+from datetime import datetime
 from typing import List, Dict, Optional
 
 logger = logging.getLogger(__name__)
 
 class MongoDBService:
-    """MongoDB service for file metadata operations"""
-    
+    """MongoDB service for user-scoped file metadata operations."""
+
     def __init__(self):
         try:
+            # Initialize MongoDB client
             self.client = MongoClient(Config.MONGO_URI, serverSelectionTimeoutMS=5000)
             self.db = self.client[Config.DB_NAME]
-            self.files_collection: Collection = self.db[Config.COLLECTION_NAME]
-            
-            # Test connection
-            self.client.admin.command('ping')
-            print("✅ MongoDB connection established successfully")
-            
-            # Create indexes for better performance
-            self.files_collection.create_index([("filename", 1)], unique=True)
-            self.files_collection.create_index([("minio_uploaded_at", -1)])
-            self.files_collection.create_index([("ai_analysis_status", 1)])
-            self.files_collection.create_index([("status", 1)])
-            print("✅ MongoDB indexes created")
-            
+            self.files = self.db[Config.COLLECTION_NAME]
+
+            # Verify connection
+            self.client.admin.command("ping")
+            logger.info("✅ MongoDB connected successfully")
+
+            # Ensure indexes exist
+            existing = self.files.index_information()
+            if "filename_1" not in existing:
+                self.files.create_index([("filename", 1)])
+            if "user_id_1" not in existing:
+                self.files.create_index([("user_id", 1)])
+            if "minio_uploaded_at_-1" not in existing:
+                self.files.create_index([("minio_uploaded_at", DESCENDING)])
+            if "ai_analysis_status_1" not in existing:
+                self.files.create_index([("ai_analysis_status", 1)])
+
+            logger.info("✅ MongoDB indexes ready")
+
         except PyMongoError as e:
-            logger.error(f"❌ MongoDB connection failed: {e}")
-            print(f"❌ MongoDB connection failed: {e}")
+            logger.error(f"❌ MongoDB initialization error: {e}", exc_info=True)
             raise
-    
-    def insert_file(self, file_metadata: FileMetadata) -> str:
-        """Insert file metadata into MongoDB"""
+
+    # ------------------------------------------------------------
+    # INSERT
+    # ------------------------------------------------------------
+    def insert_file(self, file_meta: FileMetadata) -> str:
+        """Insert file metadata document."""
         try:
-            result = self.files_collection.insert_one(file_metadata.to_dict())
-            logger.info(f"✅ File metadata inserted for: {file_metadata.filename}")
+            file_dict = file_meta.to_dict()
+            file_dict.setdefault("minio_uploaded_at", datetime.utcnow().isoformat())
+            file_dict.setdefault("status", "minio")
+            file_dict.setdefault("ai_analysis_status", "pending")
+
+            result = self.files.insert_one(file_dict)
+            logger.info(f"✅ Inserted metadata for '{file_meta.filename}' (user: {file_meta.user_id})")
             return str(result.inserted_id)
-        except PyMongoError as e:
-            logger.error(f"❌ Error inserting file metadata for {file_metadata.filename}: {e}")
+        except DuplicateKeyError:
+            logger.warning(f"⚠️ Duplicate file: {file_meta.filename}")
             raise
-    
-    def get_file(self, filename: str) -> Optional[Dict]:
-        """Get file metadata by filename as dictionary"""
-        try:
-            data = self.files_collection.find_one({"filename": filename})
-            if data and '_id' in data:
-                data['_id'] = str(data['_id'])  # Convert ObjectId to string
-            return data
         except PyMongoError as e:
-            logger.error(f"❌ Error getting file {filename}: {e}")
+            logger.error(f"❌ MongoDB insert error for {file_meta.filename}: {e}", exc_info=True)
+            raise
+
+    # ------------------------------------------------------------
+    # GET ALL FILES
+    # ------------------------------------------------------------
+    def get_all_files(self, user_id: Optional[str] = None) -> List[Dict]:
+        """Fetch all files for a specific user."""
+        try:
+            query = {"user_id": user_id} if user_id else {}
+            cursor = self.files.find(query).sort("minio_uploaded_at", DESCENDING)
+            files = [self._normalize(doc) for doc in cursor]
+            logger.debug(f"📂 Retrieved {len(files)} files for user {user_id}")
+            return files
+        except PyMongoError as e:
+            logger.error(f"❌ MongoDB fetch error: {e}", exc_info=True)
+            return []
+
+    # ------------------------------------------------------------
+    # GET SINGLE FILE
+    # ------------------------------------------------------------
+    def get_file(self, filename: str, user_id: Optional[str] = None) -> Optional[Dict]:
+        """Get a single file metadata document."""
+        try:
+            query = {"filename": filename}
+            if user_id:
+                query["user_id"] = user_id
+            doc = self.files.find_one(query)
+            return self._normalize(doc)
+        except PyMongoError as e:
+            logger.error(f"❌ MongoDB error fetching file {filename}: {e}", exc_info=True)
             return None
-    
-    def get_file_by_filename(self, filename: str) -> Optional[Dict]:
-        """Alias for get_file method for compatibility"""
-        return self.get_file(filename)
-    
-    def get_all_files(self) -> List[Dict]:
-        """Get all file metadata as list of dictionaries"""
+
+    # ------------------------------------------------------------
+    # DELETE FILE
+    # ------------------------------------------------------------
+    def delete_file(self, filename: str, user_id: Optional[str] = None) -> bool:
+        """Delete file metadata document."""
         try:
-            cursor = self.files_collection.find({}).sort("minio_uploaded_at", DESCENDING)
-            files = []
-            for doc in cursor:
-                if '_id' in doc:
-                    doc['_id'] = str(doc['_id'])
-                files.append(doc)
-            logger.info(f"✅ Retrieved {len(files)} files from database")
-            return files
-        except PyMongoError as e:
-            logger.error(f"❌ Error getting all files: {e}")
-            return []
-    
-    def get_files_by_status(self, status: str) -> List[Dict]:
-        """Get files by upload status"""
-        try:
-            cursor = self.files_collection.find({"status": status})
-            files = []
-            for doc in cursor:
-                if '_id' in doc:
-                    doc['_id'] = str(doc['_id'])
-                files.append(doc)
-            return files
-        except PyMongoError as e:
-            logger.error(f"❌ Error getting files by status {status}: {e}")
-            return []
-    
-    def update_file(self, filename: str, update_data: dict) -> bool:
-        """Update file metadata"""
-        try:
-            # Add timestamp for the update
-            if update_data and not any(key.startswith('$') for key in update_data.keys()):
-                update_data['last_updated'] = datetime.utcnow().isoformat()
-            
-            result = self.files_collection.update_one(
-                {"filename": filename},
-                {"$set": update_data}
-            )
-            
-            if result.modified_count > 0:
-                logger.info(f"✅ File metadata updated for: {filename}")
-                return True
+            query = {"filename": filename}
+            if user_id:
+                query["user_id"] = user_id
+            result = self.files.delete_one(query)
+            deleted = result.deleted_count > 0
+            if deleted:
+                logger.info(f"🗑️ Deleted metadata for '{filename}' (user: {user_id})")
             else:
-                logger.warning(f"⚠️ No changes made for file: {filename}")
-                return False
-                
+                logger.warning(f"⚠️ File not found for deletion: {filename} (user: {user_id})")
+            return deleted
         except PyMongoError as e:
-            logger.error(f"❌ Error updating file {filename}: {e}")
+            logger.error(f"❌ MongoDB delete error for {filename}: {e}", exc_info=True)
             return False
-    
-    def delete_file(self, filename: str) -> bool:
-        """Delete file metadata"""
-        try:
-            result = self.files_collection.delete_one({"filename": filename})
-            if result.deleted_count > 0:
-                logger.info(f"✅ File metadata deleted for: {filename}")
-                return True
-            else:
-                logger.warning(f"⚠️ File not found for deletion: {filename}")
-                return False
-        except PyMongoError as e:
-            logger.error(f"❌ Error deleting file {filename}: {e}")
+
+    # ------------------------------------------------------------
+    # UPDATE FILE
+    # ------------------------------------------------------------
+    def update_file(self, filename: str, data: dict, user_id: Optional[str] = None) -> bool:
+        """Update file metadata document."""
+        if not data:
             return False
-    
-    def get_pending_analysis_files(self) -> List[Dict]:
-        """Get files pending AI analysis as list of dictionaries"""
         try:
-            cursor = self.files_collection.find({
-                "ai_analysis_status": "pending"
-            })
-            files = []
-            for doc in cursor:
-                if '_id' in doc:
-                    doc['_id'] = str(doc['_id'])
-                files.append(doc)
-            return files
+            data["last_updated"] = datetime.utcnow().isoformat()
+            query = {"filename": filename}
+            if user_id:
+                query["user_id"] = user_id
+            result = self.files.update_one(query, {"$set": data})
+            modified = result.modified_count > 0
+            logger.info(f"🔄 Updated metadata for {filename} (user: {user_id}) -> modified: {modified}")
+            return modified
         except PyMongoError as e:
-            logger.error(f"❌ Error getting pending analysis files: {e}")
-            return []
-    
-    def get_recent_files(self, limit: int = 50) -> List[Dict]:
-        """Get most recently uploaded files"""
-        try:
-            cursor = self.files_collection.find({}).sort("minio_uploaded_at", DESCENDING).limit(limit)
-            files = []
-            for doc in cursor:
-                if '_id' in doc:
-                    doc['_id'] = str(doc['_id'])
-                files.append(doc)
-            return files
-        except PyMongoError as e:
-            logger.error(f"❌ Error getting recent files: {e}")
-            return []
-    
-    def get_files_by_date_range(self, start_date: datetime, end_date: datetime) -> List[Dict]:
-        """Get files uploaded within a date range"""
-        try:
-            cursor = self.files_collection.find({
-                "minio_uploaded_at": {
-                    "$gte": start_date.isoformat(),
-                    "$lte": end_date.isoformat()
-                }
-            }).sort("minio_uploaded_at", DESCENDING)
-            
-            files = []
-            for doc in cursor:
-                if '_id' in doc:
-                    doc['_id'] = str(doc['_id'])
-                files.append(doc)
-            return files
-        except PyMongoError as e:
-            logger.error(f"❌ Error getting files by date range: {e}")
-            return []
-    
-    def get_analyzed_files(self) -> List[Dict]:
-        """Get files that have AI analysis"""
-        try:
-            cursor = self.files_collection.find({
-                "ai_analysis_status": "completed",
-                "ai_analysis": {"$exists": True, "$ne": None}
-            }).sort("minio_uploaded_at", DESCENDING)
-            
-            files = []
-            for doc in cursor:
-                if '_id' in doc:
-                    doc['_id'] = str(doc['_id'])
-                files.append(doc)
-            return files
-        except PyMongoError as e:
-            logger.error(f"❌ Error getting analyzed files: {e}")
-            return []
-    
-    def get_files_by_extension(self, extension: str) -> List[Dict]:
-        """Get files by file extension"""
-        try:
-            cursor = self.files_collection.find({
-                "filename": {"$regex": f"\\.{extension}$", "$options": "i"}
-            }).sort("minio_uploaded_at", DESCENDING)
-            
-            files = []
-            for doc in cursor:
-                if '_id' in doc:
-                    doc['_id'] = str(doc['_id'])
-                files.append(doc)
-            return files
-        except PyMongoError as e:
-            logger.error(f"❌ Error getting files by extension {extension}: {e}")
-            return []
-    
-    def search_files(self, search_term: str) -> List[Dict]:
-        """Search files by filename or AI analysis content"""
-        try:
-            cursor = self.files_collection.find({
-                "$or": [
-                    {"filename": {"$regex": search_term, "$options": "i"}},
-                    {"ai_analysis.summary": {"$regex": search_term, "$options": "i"}},
-                    {"ai_analysis.caption": {"$regex": search_term, "$options": "i"}},
-                    {"ai_analysis.keywords": {"$in": [search_term]}}
-                ]
-            }).sort("minio_uploaded_at", DESCENDING)
-            
-            files = []
-            for doc in cursor:
-                if '_id' in doc:
-                    doc['_id'] = str(doc['_id'])
-                files.append(doc)
-            return files
-        except PyMongoError as e:
-            logger.error(f"❌ Error searching files with term '{search_term}': {e}")
-            return []
-    
-    def get_storage_stats(self) -> Dict:
-        """Get comprehensive storage statistics"""
-        try:
-            all_files = self.get_all_files()
-            
-            total_files = len(all_files)
-            total_size = sum(f.get('size', 0) for f in all_files)
-            avg_file_size = total_size / total_files if total_files > 0 else 0
-            
-            files_analyzed = sum(1 for f in all_files if f.get('ai_analysis_status') == 'completed')
-            
-            status_distribution = {}
-            for file in all_files:
-                status = file.get('status', 'unknown')
-                status_distribution[status] = status_distribution.get(status, 0) + 1
-            
-            return {
-                "total_files": total_files,
-                "total_size": total_size,
-                "avg_file_size": avg_file_size,
-                "status_distribution": status_distribution,
-                "files_analyzed": files_analyzed
-            }
-        except Exception as e:
-            logger.error(f"Error getting storage stats: {e}")
-            return {
-                "total_files": 0,
-                "total_size": 0,
-                "avg_file_size": 0,
-                "status_distribution": {},
-                "files_analyzed": 0
-            }
+            logger.error(f"❌ MongoDB update error for {filename}: {e}", exc_info=True)
+            return False
 
-    def get_upload_trends(self, days: int = 30) -> List[Dict]:
-        """Get upload trends for the last N days"""
+    # ------------------------------------------------------------
+    # SEARCH FILES
+    # ------------------------------------------------------------
+    def search_files(self, query_text: str, user_id: Optional[str] = None) -> List[Dict]:
+        """Search user's files by filename, AI keywords, or summary."""
         try:
-            all_files = self.get_all_files()
-            
-            uploads_by_date = {}
-            for file in all_files:
-                upload_date_str = file.get('minio_uploaded_at') or file.get('uploaded_at')
-                if upload_date_str:
-                    try:
-                        if 'T' in upload_date_str:
-                            upload_date = datetime.fromisoformat(upload_date_str.replace('Z', '+00:00'))
-                        else:
-                            upload_date = datetime.strptime(upload_date_str, '%Y-%m-%d %H:%M:%S')
-                        
-                        date_key = upload_date.strftime('%Y-%m-%d')
-                        uploads_by_date[date_key] = uploads_by_date.get(date_key, 0) + 1
-                    except (ValueError, AttributeError):
-                        continue
-            
-            end_date = datetime.now()
-            start_date = end_date - timedelta(days=days)
-            daily_uploads = []
-            
-            current_date = start_date
-            while current_date <= end_date:
-                date_str = current_date.strftime('%Y-%m-%d')
-                daily_uploads.append({
-                    "_id": date_str,
-                    "count": uploads_by_date.get(date_str, 0)
-                })
-                current_date += timedelta(days=1)
-            
-            return daily_uploads
-        except Exception as e:
-            logger.error(f"Error getting upload trends: {e}")
+            if not query_text:
+                return self.get_all_files(user_id)
+
+            filters = [
+                {"filename": {"$regex": query_text, "$options": "i"}},
+                {"ai_analysis.keywords": {"$regex": query_text, "$options": "i"}},
+                {"ai_analysis.summary": {"$regex": query_text, "$options": "i"}},
+            ]
+            query = {"$and": [{"user_id": user_id}, {"$or": filters}]} if user_id else {"$or": filters}
+
+            cursor = self.files.find(query).sort("minio_uploaded_at", DESCENDING)
+            results = [self._normalize(doc) for doc in cursor]
+            logger.debug(f"🔍 Search results for '{query_text}' (user: {user_id}) -> {len(results)} files")
+            return results
+        except PyMongoError as e:
+            logger.error(f"❌ MongoDB search error for '{query_text}': {e}", exc_info=True)
             return []
 
-    def get_top_keywords(self, limit: int = 10) -> List[Dict]:
-        """Get top keywords from AI analysis"""
+    # ------------------------------------------------------------
+    # PENDING ANALYSIS FILES
+    # ------------------------------------------------------------
+    def get_pending_analysis_files(self, limit: int = 20) -> List[Dict]:
+        """Get files waiting for AI analysis."""
         try:
-            all_files = self.get_all_files()
-            
-            keyword_counts = {}
-            for file in all_files:
-                keywords = file.get('ai_analysis', {}).get('keywords', [])
-                for keyword in keywords:
-                    if keyword:
-                        keyword_counts[keyword] = keyword_counts.get(keyword, 0) + 1
-            
-            top_tags = [{"_id": k, "count": v} for k, v in keyword_counts.items()]
-            top_tags.sort(key=lambda x: x["count"], reverse=True)
-            top_tags = top_tags[:limit]
-            
-            return top_tags
-        except Exception as e:
-            logger.error(f"Error getting top keywords: {e}")
-            return []
-        
-    def search_files_advanced(self, search_query=None, limit=100, skip=0):
-        """Advanced search with query and pagination"""
-        try:
-            if search_query is None:
-                search_query = {}
-            
-            cursor = self.files_collection.find(search_query).sort("minio_uploaded_at", -1).skip(skip).limit(limit)
-            files = []
-            for doc in cursor:
-                if '_id' in doc:
-                    doc['_id'] = str(doc['_id'])
-                files.append(doc)
-            return files
+            query = {"$or": [
+                {"ai_analysis_status": "pending"},
+                {"ai_analysis_status": {"$exists": False}},
+            ]}
+            cursor = self.files.find(query).sort("minio_uploaded_at", DESCENDING).limit(limit)
+            return [self._normalize(doc) for doc in cursor]
         except PyMongoError as e:
-            logger.error(f"Advanced search error: {e}")
+            logger.error(f"❌ MongoDB error fetching pending files: {e}", exc_info=True)
             return []
 
-def get_search_count(self, search_query=None):
-    """Get count of search results"""
-    try:
-        if search_query is None:
-            search_query = {}
-        return self.files_collection.count_documents(search_query)
-    except PyMongoError as e:
-        logger.error(f"Search count error: {e}")
-        return 0
-    
-def close_connection(self):
-        """Close MongoDB connection"""
-        try:
-            self.client.close()
-            logger.info("✅ MongoDB connection closed")
-        except PyMongoError as e:
-            logger.error(f"❌ Error closing MongoDB connection: {e}")
-def search_simple(self, query: str = "") -> List[Dict]:
-    """Simple search in filename and keywords"""
-    try:
-        if not query:
-            return self.get_all_files()
-        
-        all_files = self.get_all_files()
-        results = []
-        
-        for file in all_files:
-            # Search in filename
-            filename = file.get('filename', '').lower()
-            if query.lower() in filename:
-                results.append(file)
-                continue
-            
-            # Search in keywords
-            keywords = file.get('ai_analysis', {}).get('keywords', [])
-            if any(query.lower() in str(kw).lower() for kw in keywords):
-                results.append(file)
-        
-        return results
-    except Exception as e:
-        logger.error(f"Simple search error: {e}")
-        return []
+    # ------------------------------------------------------------
+    # HELPERS
+    # ------------------------------------------------------------
+    def _normalize(self, doc: Optional[Dict]) -> Dict:
+        """Normalize MongoDB document."""
+        if not doc:
+            return {}
+        d = dict(doc)
+        d["_id"] = str(d.get("_id"))
+        d.setdefault("ai_analysis_status", d.get("ai_analysis_status", "pending"))
+        d.setdefault("status", d.get("status", "minio"))
+        d.setdefault("minio_uploaded_at", d.get("minio_uploaded_at", datetime.utcnow().isoformat()))
+        return d
 
-def filter_files(self, filename_filter: str = "", keyword_filter: str = "") -> List[Dict]:
-    """Filter files by filename and/or keywords"""
-    try:
-        all_files = self.get_all_files()
-        filtered_files = []
-        
-        for file in all_files:
-            # Apply filename filter
-            if filename_filter:
-                filename = file.get('filename', '').lower()
-                if filename_filter.lower() not in filename:
-                    continue
-            
-            # Apply keyword filter
-            if keyword_filter:
-                keywords = file.get('ai_analysis', {}).get('keywords', [])
-                if not any(keyword_filter.lower() in str(kw).lower() for kw in keywords):
-                    continue
-            
-            filtered_files.append(file)
-        
-        return filtered_files
-    except Exception as e:
-        logger.error(f"File filtering error: {e}")
-        return []
-
-# Global instance
+# ------------------------------------------------------------
+# GLOBAL INSTANCE
+# ------------------------------------------------------------
+logger.info("🔄 Creating global MongoDB service instance...")
 mongodb_service = MongoDBService()
