@@ -1,7 +1,10 @@
+# routes/upload_routes.py
+
 from flask import request, jsonify
 from services.service_manager import service_manager
 from models.file_model import FileMetadata
 from utils.helpers import get_content_type
+from utils.virus_scan import scan_file  # ✅ NEW import
 from functools import wraps
 import jwt
 from config import Config
@@ -21,18 +24,15 @@ def token_required(f):
             return jsonify({"error": "Token missing"}), 401
 
         try:
-            # Remove Bearer prefix if present
             if token.startswith("Bearer "):
                 token = token[7:]
 
-            # Decode JWT
             data = jwt.decode(token, Config.JWT_SECRET_KEY, algorithms=["HS256"])
             user_id = str(data.get("user_id"))
 
             if not user_id:
                 return jsonify({"error": "Invalid token: no user_id"}), 401
 
-            # Inject user_id into route
             return f(user_id, *args, **kwargs)
 
         except jwt.ExpiredSignatureError:
@@ -57,49 +57,66 @@ def setup_upload_routes(app):
     def upload_file(user_id):
         """Upload file to MinIO and save metadata in MongoDB"""
         try:
-            # ✅ 1. Validate file existence
+            # ✅ 1. Validate file
             if "file" not in request.files:
                 return jsonify({"error": "No file provided"}), 400
 
             file = request.files["file"]
-            if not file.filename.strip():
+            filename = file.filename.strip()
+
+            if not filename:
                 return jsonify({"error": "No file selected"}), 400
 
-            filename = file.filename.strip()
             file_data = file.read()
-
-            # ✅ 2. Validate non-empty file
             if not file_data:
                 return jsonify({"error": "Empty file"}), 400
 
-            # ✅ 3. Determine content type
+            # ✅ 2. Scan file for viruses
+            logger.info(f"🧪 Scanning {filename} for viruses...")
+            is_clean, virus_name = scan_file(file_data)
+
+            if not is_clean:
+                logger.warning(f"🚫 Virus detected in {filename}: {virus_name}")
+                # Save metadata with infected status for audit
+                infected_meta = FileMetadata(
+                    filename=filename,
+                    size=len(file_data),
+                    content_type=get_content_type(filename),
+                    user_id=user_id
+                )
+                infected_meta.scan_status = "infected"
+                infected_meta.virus_name = virus_name
+                service_manager.mongodb.insert_file(infected_meta)
+                return jsonify({"error": f"File blocked due to virus: {virus_name}"}), 400
+
+            # ✅ 3. Upload clean file to MinIO
             content_type = get_content_type(filename)
+            uploaded = service_manager.minio.upload_file(user_id, filename, file_data, content_type)
+            if not uploaded:
+                return jsonify({"error": "MinIO upload failed"}), 500
 
-            # ✅ 4. Upload to MinIO (per-user folder)
-            service_manager.minio.upload_file(user_id, filename, file_data, content_type)
-
-            # ✅ 5. Generate presigned URLs
+            # ✅ 4. Generate presigned URLs
             minio_preview_url, minio_download_url = service_manager.minio.generate_presigned_urls(
                 user_id, filename
             )
 
-            # ✅ 6. Create file metadata (now includes user_id)
+            # ✅ 5. Create metadata
             file_meta = FileMetadata(
                 filename=filename,
                 size=len(file_data),
                 content_type=content_type,
-                user_id=user_id  # ✅ attach uploader’s ID
+                user_id=user_id
             )
-
-            # Set URLs and status
             file_meta.minio_preview_url = minio_preview_url
             file_meta.minio_download_url = minio_download_url
             file_meta.ai_analysis_status = "pending"
+            file_meta.scan_status = "clean"
+            file_meta.virus_name = None
 
-            # ✅ 7. Save metadata in MongoDB
+            # ✅ 6. Save in MongoDB
             service_manager.mongodb.insert_file(file_meta)
 
-            # ✅ 8. Check if AI analysis is supported
+            # ✅ 7. AI analysis support check
             ai_analysis_queued = False
             if service_manager.ai and service_manager.ai.is_available():
                 supported_extensions = ["pdf", "txt", "jpg", "jpeg", "png", "gif", "csv", "json", "xml"]
@@ -107,9 +124,9 @@ def setup_upload_routes(app):
                 if ext in supported_extensions:
                     ai_analysis_queued = True
 
-            # ✅ 9. Return success response
             return jsonify({
-                "message": f"{filename} uploaded successfully",
+                "message": f"{filename} uploaded successfully and scanned clean.",
+                "scan_status": "clean",
                 "minio_available": True,
                 "minio_urls_generated": bool(minio_preview_url and minio_download_url),
                 "ai_analysis_queued": ai_analysis_queued
