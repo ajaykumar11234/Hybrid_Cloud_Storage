@@ -1,43 +1,99 @@
 import logging
 from datetime import datetime
 from typing import List, Dict, Optional
+import ssl
+import certifi
 
-# from pymongo import MongoClient, DESCENDING
-# from pymongo.errors import PyMongoError, DuplicateKeyError
-import certifi  # ✅ For trusted SSL certificates
+# ✅ Import MongoClient & PyMongo errors
+from pymongo import MongoClient, DESCENDING
+from pymongo.errors import PyMongoError, DuplicateKeyError
+
 from config import Config
 from models.file_model import FileMetadata
 
 logger = logging.getLogger(__name__)
 
+
 class MongoDBService:
+    """MongoDB service for user-scoped file metadata operations."""
+
     def __init__(self):
         try:
-            logger.info("🔄 Connecting to MongoDB...")
+            logger.info("🔄 [MongoDB] Initializing connection...")
 
-            # ✅ Force TLS 1.2 and use trusted CA from certifi
+            # ✅ Secure TLS connection (works on Render)
             self.client = MongoClient(
                 Config.MONGO_URI,
                 tls=True,
-                tlsAllowInvalidCertificates=False,
                 tlsCAFile=certifi.where(),
                 ssl_cert_reqs=ssl.CERT_REQUIRED,
-                serverSelectionTimeoutMS=8000,
+                serverSelectionTimeoutMS=8000
             )
 
+            # ✅ Verify connection
             self.client.admin.command("ping")
-            logger.info("✅ MongoDB connected successfully")
+            logger.info("✅ [MongoDB] Connected successfully")
 
+            # Select DB and collection
             self.db = self.client[Config.DB_NAME]
             self.files = self.db[Config.COLLECTION_NAME]
 
-        except Exception as e:
-            logger.error(f"❌ MongoDB connection failed: {e}", exc_info=True)
+            self._ensure_indexes()
+
+        except PyMongoError as e:
+            logger.error(f"❌ [MongoDB] Connection or setup failed: {e}", exc_info=True)
             raise
 
+    # ------------------------------------------------------------
+    # INDEX SETUP
+    # ------------------------------------------------------------
+    def _ensure_indexes(self):
+        """Ensure required indexes exist on the collection."""
+        try:
+            existing_indexes = self.files.index_information()
+
+            def create_index_safe(fields, **kwargs):
+                name = kwargs.pop("name", "_".join(f"{f[0]}_{f[1]}" for f in fields))
+                if name not in existing_indexes:
+                    self.files.create_index(fields, name=name, **kwargs)
+                    logger.info(f"🆕 Created index: {name}")
+                else:
+                    logger.debug(f"ℹ️ Index already exists: {name}")
+
+            # Regular indexes
+            create_index_safe([("filename", 1)])
+            create_index_safe([("user_id", 1)])
+            create_index_safe([("minio_uploaded_at", DESCENDING)])
+            create_index_safe([("ai_analysis_status", 1)])
+
+            # Text index for search
+            text_index_exists = any(
+                idx.get("key", {}).get("_fts") == "text"
+                for idx in existing_indexes.values()
+            )
+
+            if not text_index_exists:
+                self.files.create_index(
+                    [
+                        ("filename", "text"),
+                        ("ai_analysis.summary", "text"),
+                        ("ai_analysis.keywords", "text"),
+                    ],
+                    name="text_search_index",
+                    default_language="english",
+                )
+                logger.info("🆕 Created text index for search")
+            else:
+                logger.debug("ℹ️ Text index already exists")
+
+            logger.info("✅ [MongoDB] Indexes ready")
+
+        except PyMongoError as e:
+            logger.error(f"❌ [MongoDB] Index creation failed: {e}", exc_info=True)
+            raise
 
     # ------------------------------------------------------------
-    # INSERT FILE
+    # CRUD OPERATIONS
     # ------------------------------------------------------------
     def insert_file(self, file_meta: FileMetadata) -> str:
         """Insert new file metadata document."""
@@ -50,17 +106,13 @@ class MongoDBService:
             result = self.files.insert_one(file_dict)
             logger.info(f"✅ Inserted metadata for '{file_meta.filename}' (user: {file_meta.user_id})")
             return str(result.inserted_id)
-
         except DuplicateKeyError:
             logger.warning(f"⚠️ Duplicate file entry: {file_meta.filename}")
             raise
         except PyMongoError as e:
-            logger.error(f"❌ MongoDB insert error for {file_meta.filename}: {e}", exc_info=True)
+            logger.error(f"❌ Insert error for {file_meta.filename}: {e}", exc_info=True)
             raise
 
-    # ------------------------------------------------------------
-    # GET ALL FILES
-    # ------------------------------------------------------------
     def get_all_files(self, user_id: Optional[str] = None) -> List[Dict]:
         """Fetch all files for a specific user."""
         try:
@@ -68,12 +120,9 @@ class MongoDBService:
             cursor = self.files.find(query).sort("minio_uploaded_at", DESCENDING)
             return [self._normalize(doc) for doc in cursor]
         except PyMongoError as e:
-            logger.error(f"❌ MongoDB fetch error: {e}", exc_info=True)
+            logger.error(f"❌ Fetch error: {e}", exc_info=True)
             return []
 
-    # ------------------------------------------------------------
-    # GET SINGLE FILE
-    # ------------------------------------------------------------
     def get_file(self, filename: str, user_id: Optional[str] = None) -> Optional[Dict]:
         """Fetch single file metadata."""
         try:
@@ -83,12 +132,9 @@ class MongoDBService:
             doc = self.files.find_one(query)
             return self._normalize(doc)
         except PyMongoError as e:
-            logger.error(f"❌ MongoDB get_file error for '{filename}': {e}", exc_info=True)
+            logger.error(f"❌ Get file error: {e}", exc_info=True)
             return None
 
-    # ------------------------------------------------------------
-    # DELETE FILE
-    # ------------------------------------------------------------
     def delete_file(self, filename: str, user_id: Optional[str] = None) -> bool:
         """Delete a file metadata document (user-scoped)."""
         try:
@@ -96,39 +142,29 @@ class MongoDBService:
             if user_id:
                 query["user_id"] = user_id
             result = self.files.delete_one(query)
-            deleted = result.deleted_count > 0
-            if deleted:
-                logger.info(f"🗑️ Deleted metadata for '{filename}' (user: {user_id})")
-            else:
-                logger.warning(f"⚠️ File not found for deletion: {filename} (user: {user_id})")
-            return deleted
+            if result.deleted_count > 0:
+                logger.info(f"🗑️ Deleted '{filename}' (user: {user_id})")
+                return True
+            logger.warning(f"⚠️ File not found for deletion: {filename}")
+            return False
         except PyMongoError as e:
-            logger.error(f"❌ MongoDB delete error for '{filename}': {e}", exc_info=True)
+            logger.error(f"❌ Delete error: {e}", exc_info=True)
             return False
 
-    # ------------------------------------------------------------
-    # UPDATE FILE
-    # ------------------------------------------------------------
     def update_file(self, filename: str, updates: dict, user_id: Optional[str] = None) -> bool:
         """Update file metadata."""
-        if not updates:
-            return False
         try:
             updates["last_updated"] = datetime.utcnow().isoformat()
             query = {"filename": filename}
             if user_id:
                 query["user_id"] = user_id
             result = self.files.update_one(query, {"$set": updates})
-            modified = result.modified_count > 0
-            logger.info(f"🔄 Updated '{filename}' (user: {user_id}) -> modified={modified}")
-            return modified
+            logger.info(f"🔄 Updated '{filename}' (user: {user_id})")
+            return result.modified_count > 0
         except PyMongoError as e:
-            logger.error(f"❌ MongoDB update error for '{filename}': {e}", exc_info=True)
+            logger.error(f"❌ Update error: {e}", exc_info=True)
             return False
 
-    # ------------------------------------------------------------
-    # SEARCH FILES
-    # ------------------------------------------------------------
     def search_files(self, query_text: str, user_id: Optional[str] = None) -> List[Dict]:
         """Search user's files by filename, summary, caption, or keywords."""
         try:
@@ -144,34 +180,11 @@ class MongoDBService:
 
             query = {"$and": [{"user_id": user_id}, {"$or": filters}]} if user_id else {"$or": filters}
             cursor = self.files.find(query).sort("minio_uploaded_at", DESCENDING)
-            results = [self._normalize(doc) for doc in cursor]
-            logger.debug(f"🔍 Search '{query_text}' → {len(results)} files (user={user_id or 'ALL'})")
-            return results
-        except PyMongoError as e:
-            logger.error(f"❌ MongoDB search error for '{query_text}': {e}", exc_info=True)
-            return []
-
-    # ------------------------------------------------------------
-    # GET PENDING ANALYSIS FILES
-    # ------------------------------------------------------------
-    def get_pending_analysis_files(self, limit: int = 20) -> List[Dict]:
-        """Fetch files waiting for AI analysis."""
-        try:
-            query = {
-                "$or": [
-                    {"ai_analysis_status": "pending"},
-                    {"ai_analysis_status": {"$exists": False}},
-                ]
-            }
-            cursor = self.files.find(query).sort("minio_uploaded_at", DESCENDING).limit(limit)
             return [self._normalize(doc) for doc in cursor]
         except PyMongoError as e:
-            logger.error(f"❌ MongoDB pending analysis fetch error: {e}", exc_info=True)
+            logger.error(f"❌ Search error: {e}", exc_info=True)
             return []
 
-    # ------------------------------------------------------------
-    # HELPER: Normalize MongoDB document
-    # ------------------------------------------------------------
     def _normalize(self, doc: Optional[Dict]) -> Dict:
         """Normalize MongoDB document for API-safe response."""
         if not doc:
