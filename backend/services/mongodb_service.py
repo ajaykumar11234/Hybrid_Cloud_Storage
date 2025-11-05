@@ -1,7 +1,12 @@
-from pymongo import MongoClient
-import certifi, ssl
-from config import Config
 import logging
+from datetime import datetime
+from typing import List, Dict, Optional
+
+# from pymongo import MongoClient, DESCENDING
+# from pymongo.errors import PyMongoError, DuplicateKeyError
+import certifi  # ✅ For trusted SSL certificates
+from config import Config
+from models.file_model import FileMetadata
 
 logger = logging.getLogger(__name__)
 
@@ -30,54 +35,6 @@ class MongoDBService:
             logger.error(f"❌ MongoDB connection failed: {e}", exc_info=True)
             raise
 
-
-    # ------------------------------------------------------------
-    # INDEX SETUP
-    # ------------------------------------------------------------
-    def _ensure_indexes(self):
-        """Ensure required indexes exist on the collection."""
-        try:
-            existing_indexes = self.files.index_information()
-
-            def create_index_safe(fields, **kwargs):
-                name = kwargs.pop("name", "_".join(f"{f[0]}_{f[1]}" for f in fields))
-                if name not in existing_indexes:
-                    self.files.create_index(fields, name=name, **kwargs)
-                    logger.info(f"🆕 Created index: {name}")
-                else:
-                    logger.debug(f"ℹ️ Index already exists: {name}")
-
-            # Regular indexes
-            create_index_safe([("filename", 1)])
-            create_index_safe([("user_id", 1)])
-            create_index_safe([("minio_uploaded_at", DESCENDING)])
-            create_index_safe([("ai_analysis_status", 1)])
-
-            # Text index for search
-            text_index_exists = any(
-                idx.get("key", {}).get("_fts") == "text"
-                for idx in existing_indexes.values()
-            )
-
-            if not text_index_exists:
-                self.files.create_index(
-                    [
-                        ("filename", "text"),
-                        ("ai_analysis.summary", "text"),
-                        ("ai_analysis.keywords", "text"),
-                    ],
-                    name="text_search_index",
-                    default_language="english",
-                )
-                logger.info("🆕 Created text index for search")
-            else:
-                logger.debug("ℹ️ Text index already exists")
-
-            logger.info("✅ MongoDB indexes ready")
-
-        except PyMongoError as e:
-            logger.error(f"❌ Error ensuring indexes: {e}", exc_info=True)
-            raise
 
     # ------------------------------------------------------------
     # INSERT FILE
