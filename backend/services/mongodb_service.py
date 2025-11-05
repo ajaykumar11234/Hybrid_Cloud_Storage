@@ -1,7 +1,6 @@
 import logging
 from datetime import datetime
 from typing import List, Dict, Optional
-import ssl
 import certifi
 
 # ✅ Import MongoClient & PyMongo errors
@@ -19,14 +18,13 @@ class MongoDBService:
 
     def __init__(self):
         try:
-            logger.info("🔄 [MongoDB] Initializing connection...")
+            logger.info("🔄 [MongoDB] Initializing secure TLS connection...")
 
-            # ✅ Secure TLS connection (works on Render)
+            # ✅ Use modern TLS options (no ssl_cert_reqs)
             self.client = MongoClient(
                 Config.MONGO_URI,
                 tls=True,
                 tlsCAFile=certifi.where(),
-                ssl_cert_reqs=ssl.CERT_REQUIRED,
                 serverSelectionTimeoutMS=8000
             )
 
@@ -34,7 +32,7 @@ class MongoDBService:
             self.client.admin.command("ping")
             logger.info("✅ [MongoDB] Connected successfully")
 
-            # Select DB and collection
+            # Select database and collection
             self.db = self.client[Config.DB_NAME]
             self.files = self.db[Config.COLLECTION_NAME]
 
@@ -68,8 +66,7 @@ class MongoDBService:
 
             # Text index for search
             text_index_exists = any(
-                idx.get("key", {}).get("_fts") == "text"
-                for idx in existing_indexes.values()
+                "text" in str(idx_info.get("key", "")) for idx_info in existing_indexes.values()
             )
 
             if not text_index_exists:
@@ -132,7 +129,7 @@ class MongoDBService:
             doc = self.files.find_one(query)
             return self._normalize(doc)
         except PyMongoError as e:
-            logger.error(f"❌ Get file error: {e}", exc_info=True)
+            logger.error(f"❌ Get file error for '{filename}': {e}", exc_info=True)
             return None
 
     def delete_file(self, filename: str, user_id: Optional[str] = None) -> bool:
