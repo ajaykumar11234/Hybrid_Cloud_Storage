@@ -29,7 +29,7 @@ ENV PIP_NO_CACHE_DIR=1
 # ======================================================
 # 🔧 Copy Dependencies
 # ======================================================
-COPY ../requirements.txt /app/requirements.txt
+COPY requirements.txt /app/requirements.txt
 RUN pip install --upgrade pip && pip install -r requirements.txt
 
 # ======================================================
