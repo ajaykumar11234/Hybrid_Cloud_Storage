@@ -1,18 +1,20 @@
 import logging
-
 from services.minio_service import MinioService
 from services.s3_service import S3Service
 from services.mongodb_service import MongoDBService
 
-# Optional file processor (if used for background or AI tasks)
+logger = logging.getLogger(__name__)
+
+# ------------------------------------------------------------
+# OPTIONAL IMPORTS
+# ------------------------------------------------------------
 try:
     from services.file_processor import FileProcessor
 except ImportError:
     FileProcessor = None
+    logger.warning("⚠️ FileProcessor module not found — OCR/analysis may be limited.")
 
-logger = logging.getLogger(__name__)
-
-# Try to import AI service (Groq preferred, fallback to OpenAI)
+# AI: Prefer Groq, fallback to OpenAI
 try:
     from services.groq_service import GroqService
     AIService = GroqService
@@ -25,7 +27,7 @@ except ImportError:
     except ImportError:
         AIService = None
         ai_provider = None
-
+        logger.warning("⚠️ No AI service available (Groq/OpenAI missing).")
 
 # ------------------------------------------------------------
 # SERVICE MANAGER CLASS
@@ -34,6 +36,7 @@ class ServiceManager:
     """Centralized manager for all backend services."""
 
     def __init__(self):
+        # Predeclare attributes
         self.mongodb = None
         self.minio = None
         self.s3 = None
@@ -43,16 +46,19 @@ class ServiceManager:
         self.initialize_services()
 
     # --------------------------------------------------
-    # Initialization
+    # INITIALIZATION
     # --------------------------------------------------
     def initialize_services(self):
-        """Initialize all configured services."""
+        """Initialize all configured services safely."""
         logger.info("🚀 Initializing backend services...")
 
         # MongoDB
         try:
             self.mongodb = MongoDBService()
-            logger.info("✅ MongoDB service initialized successfully.")
+            if self.mongodb and getattr(self.mongodb, "client", None):
+                logger.info("✅ MongoDB service initialized successfully.")
+            else:
+                logger.warning("⚠️ MongoDB client unavailable after initialization.")
         except Exception as e:
             self.mongodb = None
             logger.error(f"❌ MongoDB initialization failed: {e}", exc_info=True)
@@ -60,7 +66,10 @@ class ServiceManager:
         # MinIO
         try:
             self.minio = MinioService()
-            logger.info("✅ MinIO service initialized successfully.")
+            if self.minio and getattr(self.minio, "client", None):
+                logger.info("✅ MinIO service initialized successfully.")
+            else:
+                logger.warning("⚠️ MinIO client unavailable after initialization.")
         except Exception as e:
             self.minio = None
             logger.error(f"❌ MinIO initialization failed: {e}", exc_info=True)
@@ -68,7 +77,10 @@ class ServiceManager:
         # AWS S3
         try:
             self.s3 = S3Service()
-            logger.info("✅ S3 service initialized successfully.")
+            if self.s3 and getattr(self.s3, "client", None):
+                logger.info("✅ S3 service initialized successfully.")
+            else:
+                logger.warning("⚠️ S3 client unavailable after initialization.")
         except Exception as e:
             self.s3 = None
             logger.error(f"❌ S3 initialization failed: {e}", exc_info=True)
@@ -82,13 +94,16 @@ class ServiceManager:
                 self.file_processor = None
                 logger.error(f"❌ File processor initialization failed: {e}", exc_info=True)
         else:
-            logger.info("⚙️ File processor not configured.")
+            logger.info("ℹ️ File processor not configured or unavailable.")
 
         # AI Service (Groq or OpenAI)
         if AIService:
             try:
                 self.ai = AIService()
-                logger.info(f"🤖 {ai_provider} AI service initialized successfully.")
+                if getattr(self.ai, "is_available", lambda: False)():
+                    logger.info(f"🤖 {ai_provider} AI service initialized successfully.")
+                else:
+                    logger.warning(f"⚠️ {ai_provider} AI service not available (missing API key?).")
             except Exception as e:
                 self.ai = None
                 logger.error(f"❌ Failed to initialize {ai_provider} AI service: {e}", exc_info=True)
@@ -98,20 +113,20 @@ class ServiceManager:
         logger.info("✅ Service initialization process complete.")
 
     # --------------------------------------------------
-    # Diagnostics
+    # DIAGNOSTICS
     # --------------------------------------------------
     def get_service_status(self) -> dict:
         """Return service availability states for diagnostics."""
         return {
-            "mongodb": self.mongodb is not None,
-            "minio": self.minio is not None,
-            "s3": self.s3 is not None,
+            "mongodb": bool(self.mongodb and getattr(self.mongodb, "client", None)),
+            "minio": bool(self.minio and getattr(self.minio, "client", None)),
+            "s3": bool(self.s3 and getattr(self.s3, "client", None)),
             "file_processor": self.file_processor is not None,
-            "ai_service": ai_provider if self.ai else None,
+            "ai_service": ai_provider if (self.ai and getattr(self.ai, "is_available", lambda: False)()) else None,
         }
 
     # --------------------------------------------------
-    # Reload Services
+    # RELOAD SERVICES
     # --------------------------------------------------
     def reload_services(self):
         """Reinitialize all services without restarting the app."""
@@ -125,7 +140,7 @@ class ServiceManager:
 # ------------------------------------------------------------
 try:
     service_manager = ServiceManager()
-    logger.info("🌍 ServiceManager instance created successfully.")
+    logger.info("🌍 Global ServiceManager instance created successfully.")
 except Exception as e:
     logger.exception(f"❌ Failed to create ServiceManager instance: {e}")
     service_manager = None

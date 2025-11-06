@@ -1,9 +1,9 @@
-import groq
 import json
 import re
 from datetime import datetime
 from collections import Counter
 import logging
+from groq import Groq  # ✅ Correct import for the current SDK
 from config import Config
 
 logger = logging.getLogger(__name__)
@@ -21,19 +21,25 @@ class GroqService:
         self.default_model = "llama-3.1-8b-instant"
         self.client = None
 
-        if Config.GROQ_API_KEY:
+        # Initialize Groq client safely
+        if getattr(Config, "GROQ_API_KEY", None):
             try:
-                self.client = groq.Groq(api_key=Config.GROQ_API_KEY)
-                test = self.client.chat.completions.create(
-                    messages=[{"role": "user", "content": "Hello"}],
+                # ✅ Correct client initialization
+                self.client = Groq(api_key=Config.GROQ_API_KEY)
+
+                # Optional connectivity test
+                response = self.client.chat.completions.create(
                     model=self.default_model,
+                    messages=[{"role": "user", "content": "ping"}],
                     max_tokens=3
                 )
-                logger.info(f"✅ Groq initialized using model: {test.model}")
-                print("✅ Groq API service initialized successfully")
+
+                logger.info(f"✅ [Groq] Connected successfully. Model: {response.model}")
+                print("✅ [Groq] API service initialized successfully")
+
             except Exception as e:
-                logger.error(f"❌ Groq initialization failed: {e}")
-                print(f"❌ Groq initialization failed: {e}")
+                logger.error(f"❌ [Groq] Initialization failed: {e}", exc_info=True)
+                print(f"❌ [Groq] Initialization failed: {e}")
                 self.client = None
         else:
             logger.warning("⚠️ GROQ_API_KEY not found — AI features disabled")
@@ -48,26 +54,26 @@ class GroqService:
     def analyze_text(self, text: str, filename: str, model: str = None) -> dict:
         """Analyze text using Groq AI with fallback logic"""
         if not self.is_available() or not text:
+            logger.warning("⚠️ [Groq] Service unavailable or text empty.")
             return None
 
         model = model or self.default_model
         result = self._analyze_with_model(text, filename, model)
 
-        # Try fallback models if few keywords
+        # Try fallback models if weak output
         if not result or not result.get("keywords") or len(result["keywords"]) < 3:
-            logger.warning(f"Primary model {model} produced weak output — trying fallbacks")
+            logger.warning(f"⚠️ [Groq] Primary model {model} produced weak output — trying fallbacks")
             for fallback in self.available_models:
                 if fallback != model:
-                    logger.info(f"🔁 Trying fallback model: {fallback}")
                     fallback_result = self._analyze_with_model(text, filename, fallback)
                     if fallback_result and len(fallback_result.get("keywords", [])) >= 3:
-                        logger.info(f"✅ Using fallback model: {fallback}")
                         result = fallback_result
+                        logger.info(f"✅ [Groq] Using fallback model: {fallback}")
                         break
 
         # Generate keywords manually if still weak
         if not result or len(result.get("keywords", [])) < 3:
-            logger.info("⚙️ Auto-generating keywords from raw text")
+            logger.info("⚙️ [Groq] Auto-generating keywords from raw text")
             generated = self._generate_keywords_from_text(text, filename)
             result = result or {}
             result["keywords"] = generated
@@ -80,21 +86,28 @@ class GroqService:
         """Run a single Groq model analysis safely"""
         try:
             prompt = self._build_analysis_prompt(text[:4000], filename)
-            logger.info(f"🧠 Sending request to Groq model: {model}")
+            logger.info(f"🧠 [Groq] Sending request to model: {model}")
 
             response = self.client.chat.completions.create(
-                messages=[{"role": "user", "content": prompt}],
                 model=model,
+                messages=[{"role": "user", "content": prompt}],
                 temperature=0.3,
                 max_tokens=1024,
                 top_p=0.9,
                 stream=False
             )
 
-            # Handle unexpected structure
-            message = getattr(response.choices[0].message, "content", None)
+            # ✅ Robust extraction: handle dict-like or object-like structures
+            message = None
+            if hasattr(response, "choices") and len(response.choices) > 0:
+                choice = response.choices[0]
+                if hasattr(choice, "message") and hasattr(choice.message, "content"):
+                    message = choice.message.content
+                elif isinstance(choice, dict) and "message" in choice:
+                    message = choice["message"].get("content")
+
             if not message:
-                logger.warning(f"⚠️ No content in Groq response for {filename}")
+                logger.warning(f"⚠️ [Groq] Empty response for {filename}")
                 return None
 
             result_text = message.strip()
@@ -105,12 +118,12 @@ class GroqService:
             return parsed
 
         except Exception as e:
-            logger.error(f"❌ Error analyzing {filename} with {model}: {e}")
+            logger.error(f"❌ [Groq] Error analyzing {filename} with {model}: {e}", exc_info=True)
             return None
 
     # ------------------------------------------------------------
     def _build_analysis_prompt(self, text: str, filename: str) -> str:
-        """Prepare the Groq input prompt"""
+        """Prepare Groq input prompt"""
         ext = filename.split('.')[-1].upper() if '.' in filename else 'FILE'
         return f"""
 Analyze the following file: {filename} (type: {ext})
@@ -128,7 +141,7 @@ JSON ONLY:
 
     # ------------------------------------------------------------
     def _parse_response(self, result_text: str, filename: str) -> dict:
-        """Parse Groq output to JSON"""
+        """Parse Groq output safely into JSON"""
         try:
             clean = result_text.replace("```json", "").replace("```", "").strip()
             return json.loads(clean)
@@ -139,6 +152,7 @@ JSON ONLY:
                     return json.loads(match.group())
                 except Exception:
                     pass
+        logger.warning(f"⚠️ [Groq] Failed to parse JSON for {filename}")
         return {"summary": "", "keywords": [], "caption": ""}
 
     # ------------------------------------------------------------
@@ -161,7 +175,7 @@ JSON ONLY:
 
     # ------------------------------------------------------------
     def _ensure_analysis_fields(self, result: dict, text: str, filename: str) -> dict:
-        """Ensure summary, keywords, caption exist"""
+        """Ensure result fields always exist"""
         result = result or {}
         ext = filename.split('.')[-1].upper() if '.' in filename else 'FILE'
 
@@ -181,3 +195,17 @@ JSON ONLY:
     def get_available_models(self):
         """Return supported Groq models"""
         return self.available_models.copy()
+
+
+# ------------------------------------------------------------
+# Global instance
+# ------------------------------------------------------------
+try:
+    groq_service = GroqService()
+    if groq_service and groq_service.client:
+        logger.info("✅ [Groq] Global instance ready.")
+    else:
+        logger.warning("⚠️ [Groq] Service not available.")
+except Exception as e:
+    logger.error(f"❌ [Groq] Failed to initialize global instance: {e}", exc_info=True)
+    groq_service = None

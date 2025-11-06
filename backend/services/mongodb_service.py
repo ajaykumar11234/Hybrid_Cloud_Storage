@@ -1,13 +1,16 @@
 import logging
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import List, Dict, Optional
+
 import certifi
 from pymongo import MongoClient, DESCENDING
 from pymongo.errors import PyMongoError, DuplicateKeyError
+
 from config import Config
 from models.file_model import FileMetadata
 
 logger = logging.getLogger(__name__)
+
 
 class MongoDBService:
     """MongoDB service for user-scoped file metadata operations."""
@@ -16,15 +19,14 @@ class MongoDBService:
         try:
             logger.info("🔄 [MongoDB] Initializing secure TLS connection...")
 
-            # ✅ Secure, modern TLS-based MongoDB Atlas connection
             self.client = MongoClient(
                 Config.MONGO_URI,
                 tls=True,
                 tlsCAFile=certifi.where(),
-                serverSelectionTimeoutMS=20000  # Increased timeout (20s)
+                serverSelectionTimeoutMS=20000,  # 20s timeout
             )
 
-            # ✅ Verify connection
+            # ✅ Connectivity check
             self.client.admin.command("ping")
             logger.info("✅ [MongoDB] Connected successfully")
 
@@ -32,11 +34,11 @@ class MongoDBService:
             self.db = self.client[Config.DB_NAME]
             self.files = self.db[Config.COLLECTION_NAME]
 
+            # Ensure indexes exist
             self._ensure_indexes()
 
         except PyMongoError as e:
             logger.error(f"❌ [MongoDB] Connection or setup failed: {e}", exc_info=True)
-            # Allow app to still start even if Mongo fails temporarily
             self.client = None
             self.db = None
             self.files = None
@@ -46,7 +48,7 @@ class MongoDBService:
     # ------------------------------------------------------------
     def _ensure_indexes(self):
         """Ensure required indexes exist on the collection."""
-        if not self.files:
+        if self.files is None:
             logger.warning("⚠️ [MongoDB] Skipping index setup — collection unavailable.")
             return
 
@@ -58,10 +60,8 @@ class MongoDBService:
                 if name not in existing_indexes:
                     self.files.create_index(fields, name=name, **kwargs)
                     logger.info(f"🆕 Created index: {name}")
-                else:
-                    logger.debug(f"ℹ️ Index already exists: {name}")
 
-            # Regular indexes
+            # Core indexes
             create_index_safe([("filename", 1)])
             create_index_safe([("user_id", 1)])
             create_index_safe([("minio_uploaded_at", DESCENDING)])
@@ -71,7 +71,6 @@ class MongoDBService:
             text_index_exists = any(
                 "text" in str(idx_info.get("key", "")) for idx_info in existing_indexes.values()
             )
-
             if not text_index_exists:
                 self.files.create_index(
                     [
@@ -83,8 +82,6 @@ class MongoDBService:
                     default_language="english",
                 )
                 logger.info("🆕 Created text index for search")
-            else:
-                logger.debug("ℹ️ Text index already exists")
 
             logger.info("✅ [MongoDB] Indexes ready")
 
@@ -96,7 +93,7 @@ class MongoDBService:
     # ------------------------------------------------------------
     def insert_file(self, file_meta: FileMetadata) -> str:
         """Insert new file metadata document."""
-        if not self.files:
+        if self.files is None:
             logger.error("❌ [MongoDB] Insert failed — connection unavailable.")
             return ""
 
@@ -109,6 +106,7 @@ class MongoDBService:
             result = self.files.insert_one(file_dict)
             logger.info(f"✅ Inserted metadata for '{file_meta.filename}' (user: {file_meta.user_id})")
             return str(result.inserted_id)
+
         except DuplicateKeyError:
             logger.warning(f"⚠️ Duplicate file entry: {file_meta.filename}")
             raise
@@ -118,7 +116,7 @@ class MongoDBService:
 
     def get_all_files(self, user_id: Optional[str] = None) -> List[Dict]:
         """Fetch all files for a specific user."""
-        if not self.files:
+        if self.files is None:
             logger.warning("⚠️ [MongoDB] get_all_files() skipped — no DB connection.")
             return []
 
@@ -131,8 +129,8 @@ class MongoDBService:
             return []
 
     def get_file(self, filename: str, user_id: Optional[str] = None) -> Optional[Dict]:
-        """Fetch single file metadata."""
-        if not self.files:
+        """Fetch a single file metadata entry."""
+        if self.files is None:
             logger.warning("⚠️ [MongoDB] get_file() skipped — no DB connection.")
             return None
 
@@ -146,9 +144,15 @@ class MongoDBService:
             logger.error(f"❌ Get file error for '{filename}': {e}", exc_info=True)
             return None
 
+    # ✅ NEW — Compatibility alias for older routes
+    def get_file_by_filename(self, filename: str, user_id: Optional[str] = None) -> Optional[Dict]:
+        """Alias for get_file() to maintain backward compatibility."""
+        logger.debug(f"🔍 [MongoDB] get_file_by_filename() called for {filename}")
+        return self.get_file(filename, user_id)
+
     def delete_file(self, filename: str, user_id: Optional[str] = None) -> bool:
         """Delete a file metadata document."""
-        if not self.files:
+        if self.files is None:
             logger.warning("⚠️ [MongoDB] delete_file() skipped — no DB connection.")
             return False
 
@@ -167,8 +171,8 @@ class MongoDBService:
             return False
 
     def update_file(self, filename: str, updates: dict, user_id: Optional[str] = None) -> bool:
-        """Update file metadata."""
-        if not self.files:
+        """Update file metadata document."""
+        if self.files is None:
             logger.warning("⚠️ [MongoDB] update_file() skipped — no DB connection.")
             return False
 
@@ -186,7 +190,7 @@ class MongoDBService:
 
     def search_files(self, query_text: str, user_id: Optional[str] = None) -> List[Dict]:
         """Search user's files by filename, summary, caption, or keywords."""
-        if not self.files:
+        if self.files is None:
             logger.warning("⚠️ [MongoDB] search_files() skipped — no DB connection.")
             return []
 
@@ -209,10 +213,84 @@ class MongoDBService:
             return []
 
     # ------------------------------------------------------------
-    # HELPER FUNCTIONS
+    # ANALYTICS HELPER FUNCTIONS
+    # ------------------------------------------------------------
+    def get_storage_stats(self) -> Dict:
+        """Compute global storage statistics."""
+        try:
+            files = list(self.files.find())
+            total = len(files)
+            total_size = sum(f.get("size", 0) for f in files)
+            avg_size = total_size / total if total > 0 else 0
+            analyzed = sum(1 for f in files if f.get("ai_analysis_status") == "completed")
+
+            status_dist = {}
+            for f in files:
+                s = f.get("status", "unknown")
+                status_dist[s] = status_dist.get(s, 0) + 1
+
+            return {
+                "total_files": total,
+                "total_size": total_size,
+                "avg_file_size": avg_size,
+                "files_analyzed": analyzed,
+                "status_distribution": status_dist,
+            }
+        except Exception as e:
+            logger.error(f"❌ Storage stats error: {e}")
+            return {}
+
+    def get_upload_trends(self, days: int = 30) -> List[Dict]:
+        """Get upload counts per day."""
+        try:
+            end = datetime.utcnow()
+            start = end - timedelta(days=days - 1)
+            cursor = self.files.find({"minio_uploaded_at": {"$exists": True}})
+
+            counts = {}
+            for doc in cursor:
+                date_str = str(doc.get("minio_uploaded_at", ""))[:10]
+                if date_str:
+                    counts[date_str] = counts.get(date_str, 0) + 1
+
+            trends = []
+            for i in range(days):
+                date = (start + timedelta(days=i)).strftime("%Y-%m-%d")
+                trends.append({"_id": date, "count": counts.get(date, 0)})
+            return trends
+        except Exception as e:
+            logger.error(f"❌ Upload trends error: {e}")
+            return []
+
+    def get_top_keywords(self, limit: int = 10) -> List[Dict]:
+        """Get top AI keywords across all files."""
+        try:
+            keyword_counts = {}
+            for f in self.files.find():
+                for kw in f.get("ai_analysis", {}).get("keywords", []):
+                    if isinstance(kw, str):
+                        keyword_counts[kw] = keyword_counts.get(kw, 0) + 1
+
+            top = sorted(keyword_counts.items(), key=lambda x: x[1], reverse=True)[:limit]
+            return [{"_id": k, "count": v} for k, v in top]
+        except Exception as e:
+            logger.error(f"❌ Top keyword error: {e}")
+            return []
+
+    def get_recent_files(self, limit: int = 50) -> List[Dict]:
+        """Fetch most recent uploaded files."""
+        try:
+            cursor = self.files.find().sort("minio_uploaded_at", DESCENDING).limit(limit)
+            return [self._normalize(doc) for doc in cursor]
+        except Exception as e:
+            logger.error(f"❌ Recent files error: {e}")
+            return []
+
+    # ------------------------------------------------------------
+    # HELPERS
     # ------------------------------------------------------------
     def _normalize(self, doc: Optional[Dict]) -> Dict:
-        """Normalize MongoDB document for API-safe response."""
+        """Normalize MongoDB document for safe API responses."""
         if not doc:
             return {}
         d = dict(doc)
@@ -227,6 +305,7 @@ class MongoDBService:
 # GLOBAL INSTANCE
 # ------------------------------------------------------------
 logger.info("🔄 Creating global MongoDB service instance...")
+
 try:
     mongodb_service = MongoDBService()
     if mongodb_service.client:

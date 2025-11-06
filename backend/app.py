@@ -15,8 +15,10 @@ from services.service_manager import service_manager
 logger = logging.getLogger(__name__)
 
 def create_app():
+    """Factory to create and configure the Flask app."""
     app = Flask(__name__)
 
+    # Enable CORS for frontend communication
     CORS(
         app,
         resources={r"/*": {"origins": "*"}},
@@ -25,24 +27,31 @@ def create_app():
         methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"]
     )
 
+    # Load environment config for debugging
     debug_config()
 
-    # Service manager may have partially-initialized services; just log if DB missing
+    # ----------------------------------------------------------
+    # Verify database & initialize auth routes
+    # ----------------------------------------------------------
     db = getattr(service_manager.mongodb, "db", None) if service_manager and getattr(service_manager, "mongodb", None) else None
-    if db is None:
-        logger.warning("⚠️ MongoDB not initialized (service_manager.mongodb is None). Some endpoints may be limited.")
-
-    # Initialize auth (if DB present)
-    if db:
+    if db is not None:
         init_auth_routes(db)
         app.register_blueprint(auth_bp, url_prefix="/auth")
-
-    # Register routes (they should handle missing DB/service gracefully)
+        logger.info("✅ Auth routes initialized with MongoDB.")
+    else:
+        logger.warning("⚠️ MongoDB not initialized — auth routes may be limited.")
+    
+    # ----------------------------------------------------------
+    # Register other route blueprints
+    # ----------------------------------------------------------
     setup_file_routes(app)
     setup_download_routes(app)
     setup_analysis_routes(app)
     setup_analytics_routes(app)
 
+    # ----------------------------------------------------------
+    # Health check endpoint
+    # ----------------------------------------------------------
     @app.route("/health", methods=["GET"])
     def health_check():
         return jsonify({
@@ -54,17 +63,24 @@ def create_app():
         }), 200
 
     print("✅ Flask app initialized successfully.")
-    return app
 
-if __name__ == "__main__":
-    app = create_app()
-
-    # start background threads (should be non-blocking)
+    # ----------------------------------------------------------
+    # Start background threads (safe in Render/Gunicorn)
+    # ----------------------------------------------------------
     try:
         start_background_threads()
     except Exception as e:
         logger.exception("⚠️ Background threads failed to start")
 
+    return app
+
+
+# ----------------------------------------------------------
+# Local Development / Direct Execution
+# ----------------------------------------------------------
+if __name__ == "__main__":
+    app = create_app()
+
     port = int(os.environ.get("PORT", 8000))
-    print(f"🚀 Starting Flask (Gunicorn actually launches it on port 8000) - listening on {port}")
+    print(f"🚀 Starting Flask development server on port {port}")
     app.run(host="0.0.0.0", port=port, debug=False)
