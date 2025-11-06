@@ -6,7 +6,8 @@ export function useAuth() {
   const [loading, setLoading] = useState(true);
   const [isAuthenticated, setIsAuthenticated] = useState(false);
 
-  const BASE_URL = "http://localhost:5000";
+ const BASE_URL = import.meta.env.VITE_BASE_URL;
+
 
   // ✅ Load user info from localStorage on mount
   useEffect(() => {

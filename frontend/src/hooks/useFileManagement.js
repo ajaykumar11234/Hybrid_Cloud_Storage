@@ -11,7 +11,8 @@ export function useFileManagement(showNotification) {
   const [refreshingUrls, setRefreshingUrls] = useState({});
   const [analyzingFiles, setAnalyzingFiles] = useState({});
 
-  const BASE_URL = "http://localhost:5000";
+const BASE_URL = import.meta.env.VITE_BASE_URL;
+
 
   // ✅ Helper: check if URLs are older than 23 hours (safety margin)
   const isUrlExpired = (file) => {
