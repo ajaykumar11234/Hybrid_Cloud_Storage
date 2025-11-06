@@ -27,8 +27,9 @@ ENV PIP_NO_CACHE_DIR=1
 # ======================================================
 # 📦 Install Python Dependencies
 # ======================================================
+# Copy requirements.txt from backend folder into container
 COPY requirements.txt /app/requirements.txt
-RUN pip install --upgrade pip && pip install -r requirements.txt
+RUN pip install --upgrade pip && pip install -r /app/requirements.txt
 
 # ======================================================
 # 📁 Copy Application Code

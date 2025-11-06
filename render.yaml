@@ -3,7 +3,7 @@ services:
     name: hybridstorage-backend
     env: docker
     dockerfilePath: ./backend/Dockerfile
-    dockerContext: ./backend
+    buildContext: ./backend
     plan: free
     envVars:
       - key: MONGO_URI
