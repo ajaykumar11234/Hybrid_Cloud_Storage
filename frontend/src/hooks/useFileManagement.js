@@ -12,6 +12,7 @@ export function useFileManagement(showNotification) {
   const [analyzingFiles, setAnalyzingFiles] = useState({});
 
 const BASE_URL = import.meta.env.VITE_BASE_URL;
+console.log("BASE_URL in useFileManagement:", BASE_URL);
 
 
   // ✅ Helper: check if URLs are older than 23 hours (safety margin)

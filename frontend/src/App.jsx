@@ -89,7 +89,7 @@ export default function App() {
     handleDrop,
   } = useFileManagement(showNotification);
 
-  const BASE_URL = "http://localhost:5000";
+  const BASE_URL = import.meta.env.VITE_BASE_URL;
 
   // Fetch files only after authentication
   useEffect(() => {
