@@ -27,7 +27,7 @@ ENV PIP_NO_CACHE_DIR=1
 # ======================================================
 # 📦 Install Python Dependencies
 # ======================================================
-COPY ../requirements.txt /app/requirements.tx
+COPY requirements.txt /app/requirements.txt
 RUN pip install --upgrade pip && pip install -r requirements.txt
 
 # ======================================================
